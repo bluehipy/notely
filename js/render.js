@@ -849,7 +849,6 @@ export function renderSettingsView() {
           <div class="settings-row-label">Visible widgets</div>
           <div class="settings-row-control settings-checkbox-group">
             ${checkbox('recentNotes', 'Recent Notes', w.recentNotes)}
-            ${checkbox('tasks',       'Tasks',        w.tasks)}
             ${checkbox('calendar',    'Calendar',     w.calendar)}
             ${checkbox('events',      'Events',       w.events)}
             ${checkbox('scratchpad',  'Scratch Pad',  w.scratchpad)}

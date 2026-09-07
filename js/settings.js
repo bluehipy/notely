@@ -2,18 +2,17 @@
 
 const DEFAULTS = {
   dashboard: {
-    widgets: { recentNotes: true, tasks: true, calendar: true, events: true, scratchpad: true },
+    widgets: { recentNotes: true, calendar: true, events: true, scratchpad: true },
     recentNotesCount: 8,
     calendarDaysAhead: 2,
     tasksMaxVisible: 10,
     tasksSortOrder: 'desc',
     // Gridstack layout: array of {id, x, y, w, h} in 12-column units
     layout: [
-      { id: 'tasks',       x: 0, y: 0, w: 3, h: 5 },
-      { id: 'calendar',    x: 3, y: 0, w: 4, h: 5 },
-      { id: 'events',      x: 7, y: 0, w: 5, h: 5 },
-      { id: 'recentNotes', x: 0, y: 5, w: 8, h: 5 },
-      { id: 'scratchpad',  x: 8, y: 5, w: 4, h: 5 },
+      { id: 'calendar',    x: 0, y: 0, w: 4, h: 5 },
+      { id: 'events',      x: 4, y: 0, w: 4, h: 5 },
+      { id: 'scratchpad',  x: 8, y: 0, w: 4, h: 5 },
+      { id: 'recentNotes', x: 0, y: 5, w: 12, h: 5 },
     ]
   }
 };
@@ -39,6 +38,14 @@ export function loadSettings() {
     if (parsed.dashboard?.grid) delete parsed.dashboard.grid;
     if (parsed.dashboard?.layout && !Array.isArray(parsed.dashboard.layout)) {
       delete parsed.dashboard.layout;
+    }
+    // Migrate: remove legacy built-in tasks widget from saved layouts
+    if (Array.isArray(parsed.dashboard?.layout)) {
+      parsed.dashboard.layout = parsed.dashboard.layout.filter(l => l.id !== 'tasks');
+    }
+    // Migrate: remove tasks from saved widgets object
+    if (parsed.dashboard?.widgets?.tasks !== undefined) {
+      delete parsed.dashboard.widgets.tasks;
     }
     return deepMerge(base, parsed);
   } catch {
