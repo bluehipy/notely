@@ -553,6 +553,69 @@ export function renderDashboard() {
   }
 }
 
+function buildDayScheduleHTML(dateStr) {
+  const pad = n => String(n).padStart(2, '0');
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+  const isToday = dateStr === todayStr;
+
+  const d = new Date(dateStr + 'T00:00:00');
+  const dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+  const dayEvents = store.events.filter(ev => ev.date === dateStr);
+  const allDayEvents = dayEvents.filter(ev => !ev.time);
+  const timedEvents = dayEvents.filter(ev => !!ev.time);
+
+  const byHour = {};
+  timedEvents.forEach(ev => {
+    const h = parseInt(ev.time.split(':')[0]);
+    (byHour[h] = byHour[h] || []).push(ev);
+  });
+
+  const allDayHTML = allDayEvents.length
+    ? `<div class="ds-allday">
+        <span class="ds-allday-label">All day</span>
+        <div class="ds-allday-events">
+          ${allDayEvents.map(ev => `
+            <div class="ds-allday-event" data-action="cal-delete-event" data-id="${ev.id}" title="Click to delete">
+              ${escapeHtml(ev.title)} <span class="ds-event-x">×</span>
+            </div>`).join('')}
+        </div>
+       </div>`
+    : '';
+
+  const nowHour = today.getHours();
+  const nowMin  = today.getMinutes();
+
+  const rows = Array.from({ length: 24 }, (_, h) => {
+    const evs = byHour[h] || [];
+    const isCurrent = isToday && h === nowHour;
+    const nowMarker = isCurrent
+      ? `<div class="ds-now-line" style="top:${(nowMin / 60) * 100}%"></div>`
+      : '';
+    const evHTML = evs.map(ev => `
+      <div class="ds-event" data-action="cal-delete-event" data-id="${ev.id}" title="Click to delete">
+        <span class="ds-event-time">${escapeHtml(ev.time)}</span>
+        <span class="ds-event-title">${escapeHtml(ev.title)}</span>
+        <span class="ds-event-x">×</span>
+      </div>`).join('');
+    return `
+      <div class="ds-hour${isCurrent ? ' ds-hour-current' : ''}" data-action="ds-hour-click" data-hour="${pad(h)}:00">
+        <span class="ds-hour-label">${pad(h)}:00</span>
+        <div class="ds-hour-body">
+          ${nowMarker}${evHTML}
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="day-schedule">
+      <div class="ds-header">${dateLabel}</div>
+      ${allDayHTML}
+      <div class="ds-hours" id="ds-hours-scroll">${rows}</div>
+    </div>`;
+}
+
 function buildCalendarHTML() {
   const year  = store.calendarYear;
   const month = store.calendarMonth;
@@ -758,31 +821,10 @@ export function renderCalendarView() {
   calendarEl.hidden = false;
   restoreHeaderSearch();
 
-  // Build upcoming events list (all events sorted, next 30 days)
   const pad = n => String(n).padStart(2, '0');
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
-  const upcoming = store.events
-    .filter(ev => ev.date >= todayStr)
-    .slice(0, 20);
-
-  const upcomingHTML = upcoming.length > 0
-    ? upcoming.map(ev => {
-        const d = new Date(ev.date + 'T00:00:00');
-        const label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-        return `
-        <div class="cal-upcoming-event">
-          <div class="cal-upcoming-date">${label}</div>
-          <div class="cal-upcoming-body">
-            ${ev.time ? `<span class="cal-upcoming-time">${escapeHtml(ev.time)}</span>` : ''}
-            <span class="cal-upcoming-title">${escapeHtml(ev.title)}</span>
-            <button class="cal-upcoming-del" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">
-              <i data-lucide="x"></i>
-            </button>
-          </div>
-        </div>`;
-      }).join('')
-    : '<div class="cal-upcoming-empty">No upcoming events</div>';
+  const scheduleDate = store.calendarSelectedDate || todayStr;
 
   calendarEl.innerHTML = `
     <div class="feature-view-layout">
@@ -794,18 +836,25 @@ export function renderCalendarView() {
           ${buildCalendarHTML()}
         </div>
         <div class="calendar-view-right">
-          <div class="dashboard-section-title">Upcoming Events</div>
-          <div class="cal-upcoming-list">${upcomingHTML}</div>
+          ${buildDayScheduleHTML(scheduleDate)}
         </div>
       </div>
     </div>`;
 
   if (window.lucide) window.lucide.createIcons();
 
-  // Auto-focus event input if a date is selected
-  if (store.calendarSelectedDate) {
-    setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
-  }
+  // Scroll hours timeline so current hour is visible (if viewing today)
+  setTimeout(() => {
+    const currentHourEl = document.querySelector('.ds-hour-current');
+    if (currentHourEl) {
+      currentHourEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } else {
+      // For non-today dates, scroll to 8am
+      const hoursEl = document.getElementById('ds-hours-scroll');
+      if (hoursEl) hoursEl.scrollTop = 48 * 8;
+    }
+    document.getElementById('cal-event-input')?.focus();
+  }, 0);
 }
 
 // Render Settings full-page view

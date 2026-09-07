@@ -370,6 +370,11 @@ async function handleSidebarClick(event) {
     store.currentNotebook = null;
     store.currentTag = null;
     store.currentNote = null;
+    if (!store.calendarSelectedDate) {
+      const t = new Date();
+      const p = n => String(n).padStart(2, '0');
+      store.calendarSelectedDate = `${t.getFullYear()}-${p(t.getMonth()+1)}-${p(t.getDate())}`;
+    }
     renderSidebar();
     renderCalendarView();
 
@@ -613,6 +618,14 @@ async function handleDashboardClick(event) {
       if (store.calendarSelectedDate) {
         setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
       }
+    }
+
+  } else if (action === 'ds-hour-click') {
+    const hour = target.closest('[data-hour]')?.dataset.hour;
+    if (hour) {
+      const timeInput = document.getElementById('cal-event-time');
+      if (timeInput) timeInput.value = hour;
+      setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
     }
 
   } else if (action === 'cal-add-event') {
