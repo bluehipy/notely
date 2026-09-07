@@ -11,6 +11,11 @@ import { initShortcuts } from './shortcuts.js';
 // Search state
 let searchDebounceTimer = null;
 let currentSearchQuery = null;
+
+// Dashboard drag-and-drop + resize state
+let _dragWidgetId = null;
+let _resizeState  = null;
+let _resizeRaf    = null;
 let previousContext = {
   notebook: null,
   tag: null
@@ -199,8 +204,17 @@ function setupEventListeners() {
   document.getElementById('editor')?.addEventListener('click', handleEditorClick);
 
   // Dashboard event delegation
-  document.getElementById('dashboard')?.addEventListener('click', handleDashboardClick);
-  document.getElementById('dashboard')?.addEventListener('keydown', handleDashboardKeydown);
+  const dash = document.getElementById('dashboard');
+  if (dash) {
+    dash.addEventListener('click',     handleDashboardClick);
+    dash.addEventListener('keydown',   handleDashboardKeydown);
+    dash.addEventListener('dragstart', onWidgetDragStart);
+    dash.addEventListener('dragover',  onWidgetDragOver);
+    dash.addEventListener('dragleave', onWidgetDragLeave);
+    dash.addEventListener('drop',      onWidgetDrop);
+    dash.addEventListener('dragend',   onWidgetDragEnd);
+    dash.addEventListener('mousedown', onWidgetResizeDown);
+  }
 
   // Tasks view event delegation (same handlers — rerenderActiveView picks the right renderer)
   document.getElementById('tasks-view')?.addEventListener('click', handleDashboardClick);
@@ -539,6 +553,144 @@ async function handleDashboardClick(event) {
     store.events = store.events.filter(e => e.id !== evId);
     rerenderActiveView();
 
+  } else if (action === 'grid-col-inc') {
+    const ds = store.settings.dashboard;
+    ds.grid.cols = Math.min(6, ds.grid.cols + 1);
+    saveSettings(store.settings);
+    renderDashboard();
+
+  } else if (action === 'grid-col-dec') {
+    const ds = store.settings.dashboard;
+    if (ds.grid.cols <= 1) return;
+    ds.grid.cols--;
+    clampLayout(ds.layout, ds.grid.cols, ds.grid.rows);
+    saveSettings(store.settings);
+    renderDashboard();
+
+  } else if (action === 'grid-row-inc') {
+    const ds = store.settings.dashboard;
+    ds.grid.rows = Math.min(6, ds.grid.rows + 1);
+    saveSettings(store.settings);
+    renderDashboard();
+
+  } else if (action === 'grid-row-dec') {
+    const ds = store.settings.dashboard;
+    if (ds.grid.rows <= 1) return;
+    ds.grid.rows--;
+    clampLayout(ds.layout, ds.grid.cols, ds.grid.rows);
+    saveSettings(store.settings);
+    renderDashboard();
+  }
+}
+
+// ── Dashboard drag-and-drop ─────────────────────────────────────
+
+function onWidgetDragStart(e) {
+  const header = e.target.closest('.dash-widget-header');
+  if (!header) return;
+  const widget = header.closest('.dash-widget');
+  if (!widget) return;
+  _dragWidgetId = widget.dataset.widgetId;
+  e.dataTransfer.effectAllowed = 'move';
+  widget.classList.add('is-dragging');
+}
+
+function onWidgetDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const widget = e.target.closest('.dash-widget');
+  if (!widget || widget.dataset.widgetId === _dragWidgetId) return;
+  document.querySelectorAll('.dash-widget.drop-target').forEach(w => w.classList.remove('drop-target'));
+  widget.classList.add('drop-target');
+}
+
+function onWidgetDragLeave(e) {
+  const widget = e.target.closest('.dash-widget');
+  if (widget && !widget.contains(e.relatedTarget)) widget.classList.remove('drop-target');
+}
+
+function onWidgetDrop(e) {
+  e.preventDefault();
+  const target = e.target.closest('.dash-widget');
+  if (!target || !_dragWidgetId) return;
+  const targetId = target.dataset.widgetId;
+  if (targetId === _dragWidgetId) return;
+  const layout = store.settings.dashboard.layout;
+  const a = { ...layout[_dragWidgetId] };
+  const b = { ...layout[targetId] };
+  layout[_dragWidgetId] = b;
+  layout[targetId] = a;
+  saveSettings(store.settings);
+  _dragWidgetId = null;
+  renderDashboard();
+}
+
+function onWidgetDragEnd() {
+  document.querySelectorAll('.dash-widget').forEach(w => w.classList.remove('is-dragging','drop-target'));
+  _dragWidgetId = null;
+}
+
+// ── Dashboard resize ─────────────────────────────────────────────
+
+function onWidgetResizeDown(e) {
+  const handle = e.target.closest('[data-action^="rz-"]');
+  if (!handle) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const widgetId = handle.dataset.wid;
+  const dir = handle.dataset.action;
+  const pos = store.settings.dashboard.layout[widgetId];
+  _resizeState = { widgetId, dir,
+    startX: e.clientX, startY: e.clientY,
+    origCS: pos.colSpan, origRS: pos.rowSpan };
+  document.addEventListener('mousemove', onWidgetResizeMove);
+  document.addEventListener('mouseup',   onWidgetResizeUp);
+}
+
+function onWidgetResizeMove(e) {
+  if (!_resizeState || _resizeRaf) return;
+  _resizeRaf = requestAnimationFrame(() => {
+    _resizeRaf = null;
+    if (!_resizeState) return;
+    const gridEl = document.getElementById('dash-grid');
+    if (!gridEl) return;
+    const { widgetId, dir, startX, startY, origCS, origRS } = _resizeState;
+    const ds  = store.settings.dashboard;
+    const pos = ds.layout[widgetId];
+    const cs  = getComputedStyle(gridEl);
+    const colW = parseFloat(cs.gridTemplateColumns.split(' ')[0]) || 1;
+    const rowH = parseFloat(cs.gridTemplateRows.split(' ')[0]) || 1;
+    const gapX = parseFloat(cs.columnGap) || 12;
+    const gapY = parseFloat(cs.rowGap)    || 12;
+    let newCS = origCS, newRS = origRS;
+    if (dir === 'rz-e' || dir === 'rz-se') {
+      const delta = Math.round((e.clientX - startX) / (colW + gapX));
+      newCS = Math.max(1, Math.min(ds.grid.cols - pos.col + 1, origCS + delta));
+    }
+    if (dir === 'rz-s' || dir === 'rz-se') {
+      const delta = Math.round((e.clientY - startY) / (rowH + gapY));
+      newRS = Math.max(1, Math.min(ds.grid.rows - pos.row + 1, origRS + delta));
+    }
+    if (newCS !== pos.colSpan || newRS !== pos.rowSpan) {
+      ds.layout[widgetId] = { ...pos, colSpan: newCS, rowSpan: newRS };
+      renderDashboard();
+    }
+  });
+}
+
+function onWidgetResizeUp() {
+  document.removeEventListener('mousemove', onWidgetResizeMove);
+  document.removeEventListener('mouseup',   onWidgetResizeUp);
+  if (_resizeState) { saveSettings(store.settings); _resizeState = null; }
+  if (_resizeRaf)   { cancelAnimationFrame(_resizeRaf); _resizeRaf = null; }
+}
+
+function clampLayout(layout, maxCols, maxRows) {
+  for (const pos of Object.values(layout)) {
+    pos.col     = Math.max(1, Math.min(maxCols, pos.col));
+    pos.row     = Math.max(1, Math.min(maxRows, pos.row));
+    pos.colSpan = Math.max(1, Math.min(maxCols - pos.col + 1, pos.colSpan));
+    pos.rowSpan = Math.max(1, Math.min(maxRows - pos.row + 1, pos.rowSpan));
   }
 }
 

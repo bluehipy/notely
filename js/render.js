@@ -205,94 +205,118 @@ function buildTaskItemHTML(task) {
   </div>`;
 }
 
-// Render Dashboard
-export function renderDashboard() {
-  const dashboardEl = document.getElementById('dashboard');
-  const noteListEl  = document.getElementById('note-list');
-  const editorEl    = document.getElementById('editor');
-  if (!dashboardEl) return;
+// ── Dashboard widget content builders ────────────────────────────
 
-  noteListEl.hidden  = true;
-  editorEl.hidden    = true;
-  dashboardEl.hidden = false;
-  document.getElementById('tasks-view')?.setAttribute('hidden', '');
-  document.getElementById('calendar-view')?.setAttribute('hidden', '');
-  document.getElementById('settings-view')?.setAttribute('hidden', '');
+const WIDGET_LABELS = { tasks: 'Tasks', calendar: 'Calendar', recentNotes: 'Recent Notes', scratchpad: 'Scratch Pad' };
+const WIDGET_ICONS  = { tasks: 'check-square', calendar: 'calendar', recentNotes: 'file-text', scratchpad: 'edit-3' };
 
-  const ds = store.settings.dashboard;
-  const w  = ds.widgets;
-
-  // --- Tasks widget ---
+function buildTasksContent(ds) {
   const pending   = store.tasks.filter(t => !t.completed);
   const completed = store.tasks.filter(t => t.completed);
-  const taskListMaxH = `${ds.tasksMaxVisible * 38}px`;
-
-  const tasksWidget = `
-    <div class="task-add-row">
-      <input class="task-input" id="task-input" placeholder="Add a task…" maxlength="200" autocomplete="off" />
+  const maxH = `${ds.tasksMaxVisible * 38}px`;
+  return `
+    <div class="task-add-row dash-task-add-row">
+      <input class="task-input" id="task-input" placeholder="Add a task…" maxlength="200" autocomplete="off">
       <button class="task-add-btn" data-action="add-task" title="Add task"><i data-lucide="plus"></i></button>
     </div>
-    <div class="task-list" style="max-height:${taskListMaxH}; overflow-y:auto;">
+    <div class="task-list dash-task-list" style="max-height:${maxH}; overflow-y:auto;">
       ${pending.map(buildTaskItemHTML).join('')}
       ${pending.length === 0 && completed.length === 0 ? '<div class="task-empty">No tasks yet</div>' : ''}
       ${completed.length > 0 ? `
         <div class="task-completed-heading">Completed · ${completed.length}</div>
-        ${completed.map(buildTaskItemHTML).join('')}
-      ` : ''}
+        ${completed.map(buildTaskItemHTML).join('')}` : ''}
     </div>`;
+}
 
-  // --- Notes widget ---
-  const visibleNotes = store.notes.slice(0, ds.recentNotesCount);
-  const notesGrid = visibleNotes.length > 0
-    ? visibleNotes.map(note => `
-        <div class="dashboard-card" data-action="dashboard-select-note" data-id="${note.id}">
-          <div class="dashboard-card-title">${escapeHtml(note.title || 'Untitled')}</div>
-          ${note.notebook_name ? `<div class="dashboard-card-notebook">${escapeHtml(note.notebook_name)}</div>` : ''}
-          <div class="dashboard-card-preview">${escapeHtml(generatePreview(note.body))}</div>
-          <div class="dashboard-card-timestamp">${formatTimestamp(note.created_at)}</div>
-        </div>`).join('')
-    : '<div class="dashboard-empty">No notes yet</div>';
+function buildRecentNotesContent(ds) {
+  const notes = store.notes.slice(0, ds.recentNotesCount);
+  if (!notes.length) return '<div class="dashboard-empty">No notes yet</div>';
+  return `<div class="dash-notes-grid">
+    ${notes.map(n => `
+      <div class="dashboard-card" data-action="dashboard-select-note" data-id="${n.id}">
+        <div class="dashboard-card-title">${escapeHtml(n.title || 'Untitled')}</div>
+        ${n.notebook_name ? `<div class="dashboard-card-notebook">${escapeHtml(n.notebook_name)}</div>` : ''}
+        <div class="dashboard-card-preview">${escapeHtml(generatePreview(n.body))}</div>
+        <div class="dashboard-card-timestamp">${formatTimestamp(n.created_at)}</div>
+      </div>`).join('')}
+  </div>`;
+}
 
-  // --- Row 1: Notes + Tasks ---
-  const row1 = (w.recentNotes || w.tasks) ? `
-    <div class="dashboard-section dashboard-section-row">
-      ${w.recentNotes ? `<div class="dashboard-col">
-        <div class="dashboard-section-title">Recent Notes</div>
-        <div class="dashboard-grid">${notesGrid}</div>
-      </div>` : ''}
-      ${w.tasks ? `<div class="dashboard-col">
-        <div class="dashboard-section-title">Tasks</div>
-        ${tasksWidget}
-      </div>` : ''}
-    </div>` : '';
+function buildCalendarContent(ds) {
+  return `
+    <div class="dash-cal-section">${buildCalendarHTML()}</div>
+    <div class="dash-cal-section" style="margin-top:8px">${buildThreeDayHTML(ds.calendarDaysAhead)}</div>`;
+}
 
-  // --- Row 2: Scratchpad + Calendar ---
-  const calWidget = `
-    <div class="cal-row">
-      <div>
-        <div class="dashboard-section-title">Calendar</div>
-        ${buildCalendarHTML()}
-      </div>
-      <div class="threeday-wrapper">
-        <div class="dashboard-section-title">Events</div>
-        ${buildThreeDayHTML(ds.calendarDaysAhead)}
-      </div>
-    </div>`;
+function buildWidgetContent(id, ds) {
+  switch (id) {
+    case 'tasks':       return buildTasksContent(ds);
+    case 'recentNotes': return buildRecentNotesContent(ds);
+    case 'calendar':    return buildCalendarContent(ds);
+    case 'scratchpad':  return `<textarea class="dash-scratchpad" id="scratchpad" placeholder="Quick notes…"></textarea>`;
+    default: return '';
+  }
+}
 
-  const row2 = (w.scratchpad || w.calendar) ? `
-    <div class="dashboard-section dashboard-section-row">
-      ${w.scratchpad ? `<div class="dashboard-col dashboard-col-scratch">
-        <div class="dashboard-section-title">Scratch Pad</div>
-        <textarea class="scratchpad" id="scratchpad" placeholder="Quick notes…"></textarea>
-      </div>` : ''}
-      ${w.calendar ? `<div class="dashboard-col">${calWidget}</div>` : ''}
-    </div>` : '';
+// ── Render Dashboard ─────────────────────────────────────────────
+export function renderDashboard() {
+  const dashboardEl = document.getElementById('dashboard');
+  if (!dashboardEl) return;
 
-  const emptyState = !w.recentNotes && !w.tasks && !w.scratchpad && !w.calendar
-    ? `<div class="dashboard-empty" style="padding:var(--space-xl)">All widgets are hidden. Visit <strong>Settings</strong> to turn them back on.</div>`
+  document.getElementById('note-list').hidden = true;
+  document.getElementById('editor').hidden    = true;
+  dashboardEl.hidden = false;
+  ['tasks-view','calendar-view','settings-view'].forEach(id =>
+    document.getElementById(id)?.setAttribute('hidden',''));
+
+  const ds = store.settings.dashboard;
+  const w  = ds.widgets;
+  const { cols, rows } = ds.grid;
+  const layout = ds.layout;
+
+  const visibleIds = Object.keys(layout).filter(id => w[id]);
+
+  const widgetsHTML = visibleIds.map(id => {
+    const { col, row, colSpan, rowSpan } = layout[id];
+    const safeCS = Math.min(colSpan, cols - col + 1);
+    const safeRS = Math.min(rowSpan, rows - row + 1);
+    return `
+      <div class="dash-widget" data-widget-id="${id}"
+           style="grid-column:${col}/span ${safeCS}; grid-row:${row}/span ${safeRS};">
+        <div class="dash-widget-header" draggable="true">
+          <i data-lucide="${WIDGET_ICONS[id]}" width="13" height="13"></i>
+          <span class="dash-widget-title">${WIDGET_LABELS[id]}</span>
+          <span class="dash-widget-grip"><i data-lucide="grip-horizontal" width="13" height="13"></i></span>
+        </div>
+        <div class="dash-widget-body">${buildWidgetContent(id, ds)}</div>
+        <div class="dash-rz-e"  data-action="rz-e"  data-wid="${id}"></div>
+        <div class="dash-rz-s"  data-action="rz-s"  data-wid="${id}"></div>
+        <div class="dash-rz-se" data-action="rz-se" data-wid="${id}"></div>
+      </div>`;
+  }).join('');
+
+  const emptyHTML = !visibleIds.length
+    ? `<div style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;
+                  color:var(--color-text-faint);font-size:var(--text-sm);padding:var(--space-xl)">
+        All widgets hidden — go to <strong style="margin:0 4px">Settings</strong> to enable some.</div>`
     : '';
 
-  dashboardEl.innerHTML = `<div class="dashboard-layout">${row1}${row2}${emptyState}</div>`;
+  dashboardEl.innerHTML = `
+    <div class="dash-toolbar">
+      <span class="dash-toolbar-label">Columns</span>
+      <button class="dash-grid-btn" data-action="grid-col-dec">−</button>
+      <span class="dash-grid-num">${cols}</span>
+      <button class="dash-grid-btn" data-action="grid-col-inc">+</button>
+      <span class="dash-toolbar-sep"></span>
+      <span class="dash-toolbar-label">Rows</span>
+      <button class="dash-grid-btn" data-action="grid-row-dec">−</button>
+      <span class="dash-grid-num">${rows}</span>
+      <button class="dash-grid-btn" data-action="grid-row-inc">+</button>
+    </div>
+    <div class="dash-grid" id="dash-grid"
+         style="grid-template-columns:repeat(${cols},1fr); grid-template-rows:repeat(${rows},minmax(200px,auto));">
+      ${widgetsHTML}${emptyHTML}
+    </div>`;
 
   if (window.lucide) window.lucide.createIcons();
 

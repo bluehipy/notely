@@ -4,9 +4,16 @@ const DEFAULTS = {
   dashboard: {
     widgets: { recentNotes: true, tasks: true, calendar: true, scratchpad: true },
     recentNotesCount: 8,
-    calendarDaysAhead: 2,   // 0 = selected day only, 1 = +1, 2 = +2
+    calendarDaysAhead: 2,
     tasksMaxVisible: 10,
-    tasksSortOrder: 'desc'  // 'desc' = most bells first (default), 'asc' = fewest first
+    tasksSortOrder: 'desc',
+    grid: { cols: 3, rows: 2 },
+    layout: {
+      tasks:       { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
+      calendar:    { col: 2, row: 1, colSpan: 2, rowSpan: 1 },
+      recentNotes: { col: 1, row: 2, colSpan: 1, rowSpan: 1 },
+      scratchpad:  { col: 2, row: 2, colSpan: 2, rowSpan: 1 },
+    }
   }
 };
 
