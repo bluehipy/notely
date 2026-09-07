@@ -6,9 +6,63 @@ import { db } from './db.js';
 // Session-local API history (full provider-format messages including tool call/result pairs)
 let _apiHistory = [];
 
-export function clearAdvisorHistory() {
+// Conversation persistence
+const CONV_KEY = 'notely-advisor-history';
+let _currentConvId = null;
+
+function loadAllConvs() {
+  try { return JSON.parse(localStorage.getItem(CONV_KEY) || '[]'); } catch { return []; }
+}
+
+export function saveCurrentConversation() {
+  const msgs = store.advisorMessages.filter(m => !m.working);
+  if (!msgs.length) return;
+  const convs = loadAllConvs();
+  const maxN = store.settings?.advisor?.historyMax ?? 20;
+  const title = (msgs.find(m => m.role === 'user')?.text || 'Conversation').slice(0, 60);
+  const limited = msgs.slice(-100);
+  if (_currentConvId) {
+    const idx = convs.findIndex(c => c.id === _currentConvId);
+    if (idx >= 0) {
+      convs[idx] = { ...convs[idx], messages: limited, updatedAt: new Date().toISOString() };
+      // Move to front so list stays newest-first
+      convs.unshift(convs.splice(idx, 1)[0]);
+    } else {
+      convs.unshift({ id: _currentConvId, title, messages: limited, createdAt: new Date().toISOString() });
+    }
+  } else {
+    _currentConvId = `conv_${Date.now()}`;
+    convs.unshift({ id: _currentConvId, title, messages: limited, createdAt: new Date().toISOString() });
+  }
+  if (convs.length > maxN) convs.length = maxN;
+  try { localStorage.setItem(CONV_KEY, JSON.stringify(convs)); } catch {}
+}
+
+export function loadConversation(conv) {
+  _currentConvId = conv.id;
   _apiHistory = [];
+  _sessionProvider = null;
+  store.advisorMessages = [...conv.messages];
+}
+
+export function startNewConversation() {
+  saveCurrentConversation();
+  _currentConvId = null;
+  _apiHistory = [];
+  _sessionProvider = null;
   store.advisorMessages = [];
+}
+
+export function getAllConversations() {
+  return loadAllConvs();
+}
+
+export function getCurrentConvId() {
+  return _currentConvId;
+}
+
+export function clearAdvisorHistory() {
+  startNewConversation();
 }
 
 // ── Tool definitions (Anthropic input_schema format) ─────────────
@@ -276,7 +330,7 @@ async function callAnthropic(messages, systemPrompt, apiKey) {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-client-side-api-key-usage': 'true'
+      'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, system: systemPrompt, messages, tools: TOOLS })
   });
@@ -296,7 +350,7 @@ async function callOpenAI(messages, systemPrompt, apiKey) {
 
 async function callGemini(messages, systemPrompt, apiKey) {
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -342,6 +396,22 @@ function parseGemini(raw) {
   };
 }
 
+// ── Context window pruning ───────────────────────────────────────
+
+// Returns a trimmed copy of history keeping only the last maxUserMsgs user turns
+// (plus all their interleaved assistant/tool entries)
+function pruneHistory(history, provider, maxUserMsgs) {
+  let count = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    const isUserText = provider === 'gemini'
+      ? (h.role === 'user' && h.parts?.some(p => p.text && !p.functionResponse))
+      : (h.role === 'user' && typeof h.content === 'string');
+    if (isUserText && ++count >= maxUserMsgs) return history.slice(i);
+  }
+  return history;
+}
+
 // ── Agent loop ───────────────────────────────────────────────────
 
 export async function runAdvisor(userText, onUpdate) {
@@ -380,9 +450,10 @@ export async function runAdvisor(userText, onUpdate) {
 
   let iterations = 0;
   while (iterations++ < 10) {
-    const raw = provider === 'anthropic' ? await callAnthropic(_apiHistory, systemPrompt, cfg.apiKey)
-              : provider === 'gemini'    ? await callGemini(_apiHistory, systemPrompt, cfg.apiKey)
-              :                            await callOpenAI(_apiHistory, systemPrompt, cfg.apiKey);
+    const ctx = pruneHistory(_apiHistory, provider, 10);
+    const raw = provider === 'anthropic' ? await callAnthropic(ctx, systemPrompt, cfg.apiKey)
+              : provider === 'gemini'    ? await callGemini(ctx, systemPrompt, cfg.apiKey)
+              :                            await callOpenAI(ctx, systemPrompt, cfg.apiKey);
 
     const parsed = provider === 'anthropic' ? parseAnthropic(raw)
                  : provider === 'gemini'    ? parseGemini(raw)
@@ -393,10 +464,8 @@ export async function runAdvisor(userText, onUpdate) {
       if (provider === 'anthropic') {
         _apiHistory.push({ role: 'assistant', content: parsed.rawContent });
       } else if (provider === 'gemini') {
-        const modelParts = [];
-        if (parsed.text) modelParts.push({ text: parsed.text });
-        parsed.toolCalls.forEach(c => modelParts.push({ functionCall: { name: c.name, args: c.input } }));
-        _apiHistory.push({ role: 'model', parts: modelParts });
+        // Use rawParts verbatim — Gemini requires thought signatures to be echoed back intact
+        _apiHistory.push({ role: 'model', parts: parsed.rawParts });
       } else {
         _apiHistory.push({ role: 'assistant', content: parsed.text || null, tool_calls: parsed.rawMsg.tool_calls });
       }
@@ -427,11 +496,12 @@ export async function runAdvisor(userText, onUpdate) {
     } else {
       // Final text response
       if (provider === 'gemini') {
-        _apiHistory.push({ role: 'model', parts: [{ text: parsed.text }] });
+        _apiHistory.push({ role: 'model', parts: parsed.rawParts });
       } else {
         _apiHistory.push({ role: 'assistant', content: parsed.text });
       }
       store.advisorMessages.push({ role: 'assistant', text: parsed.text });
+      saveCurrentConversation();
       onUpdate();
       break;
     }

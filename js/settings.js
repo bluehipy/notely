@@ -5,7 +5,8 @@ const DEFAULTS = {
     name: 'AI Advisor',
     provider: 'auto',
     apiKey: '',
-    systemPrompt: ''
+    systemPrompt: '',
+    historyMax: 20
   },
   dashboard: {
     widgets: { recentNotes: true, calendar: true, events: true, scratchpad: true },

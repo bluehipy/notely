@@ -2,6 +2,7 @@
 
 import { store } from './store.js';
 import { saveSettings } from './settings.js';
+import { getAllConversations, getCurrentConvId } from './advisor.js';
 
 let _grid = null; // active GridStack instance
 
@@ -770,6 +771,7 @@ export function showNotePanels() {
   document.getElementById('tasks-view')?.setAttribute('hidden', '');
   document.getElementById('calendar-view')?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
+  document.getElementById('advisor-view')?.setAttribute('hidden', '');
   const noteListEl = document.getElementById('note-list');
   const editorEl   = document.getElementById('editor');
   if (noteListEl) noteListEl.hidden = false;
@@ -791,8 +793,10 @@ export function renderTasksView() {
   dashboardEl?.setAttribute('hidden', '');
   calendarEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
+  document.getElementById('advisor-view')?.setAttribute('hidden', '');
   tasksEl.hidden = false;
-  restoreHeaderSearch();
+  document.querySelector('.search-input-wrapper')?.setAttribute('hidden', '');
+  document.getElementById('header-contextual')?.setAttribute('hidden', '');
 
   const list = store.taskLists.find(l => l.id === store.currentTaskList);
   const listType = list?.type || 'basic';
@@ -810,7 +814,8 @@ export function renderTasksView() {
   tasksEl.innerHTML = `
     <div class="feature-view-layout">
       <div class="feature-view-header">
-        <div class="feature-view-title">${escapeHtml(listName)}</div>
+        <div class="feature-view-title tl-title-editable" ${list ? `data-list-id="${list.id}" title="Click to rename"` : ''}
+             style="${list ? 'cursor:text' : ''}">${escapeHtml(listName)}</div>
         ${total > 0 ? `<div class="feature-view-subtitle">${doneCount} of ${total} done</div>` : ''}
         ${list ? `<select class="tl-type-select" data-action="set-tasklist-type" data-list-id="${list.id}" title="List type">
           <option value="priority"${listType === 'priority' ? ' selected' : ''}>🔔 Priority</option>
@@ -836,6 +841,49 @@ export function renderTasksView() {
     </div>`;
 
   if (window.lucide) window.lucide.createIcons();
+
+  // Inline task list title rename
+  if (list) {
+    const titleEl = tasksEl.querySelector('.tl-title-editable');
+    if (titleEl) {
+      titleEl.addEventListener('click', () => {
+        if (titleEl.contentEditable === 'true') return;
+        const original = titleEl.textContent;
+        let committed = false;
+        titleEl.contentEditable = 'true';
+        titleEl.focus();
+        const range = document.createRange();
+        range.selectNodeContents(titleEl);
+        range.collapse(false);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        const commit = async () => {
+          if (committed) return;
+          committed = true;
+          titleEl.contentEditable = 'false';
+          const name = titleEl.textContent.trim() || original;
+          titleEl.textContent = name;
+          if (name !== original) {
+            const { db } = await import('./db.js');
+            try {
+              await db.run('UPDATE task_lists SET name = ? WHERE id = ?', [name, list.id]);
+              const tl = store.taskLists.find(l => l.id === list.id);
+              if (tl) tl.name = name;
+            } catch (e) { titleEl.textContent = original; }
+            renderSidebar();
+          }
+        };
+
+        titleEl.addEventListener('blur', commit, { once: true });
+        titleEl.addEventListener('keydown', e => {
+          if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+          if (e.key === 'Escape') { titleEl.textContent = original; titleEl.blur(); }
+        });
+      });
+    }
+  }
 }
 
 // Render Calendar full-page view
@@ -852,8 +900,10 @@ export function renderCalendarView() {
   dashboardEl?.setAttribute('hidden', '');
   tasksEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
+  document.getElementById('advisor-view')?.setAttribute('hidden', '');
   calendarEl.hidden = false;
-  restoreHeaderSearch();
+  document.querySelector('.search-input-wrapper')?.setAttribute('hidden', '');
+  document.getElementById('header-contextual')?.setAttribute('hidden', '');
 
   const pad = n => String(n).padStart(2, '0');
   const today = new Date();
@@ -896,7 +946,7 @@ export function renderSettingsView() {
   const el = document.getElementById('settings-view');
   if (!el) return;
 
-  ['note-list','editor','dashboard','tasks-view','calendar-view'].forEach(id =>
+  ['note-list','editor','dashboard','tasks-view','calendar-view','advisor-view'].forEach(id =>
     document.getElementById(id)?.setAttribute('hidden', '')
   );
   el.hidden = false;
@@ -994,7 +1044,7 @@ export function renderSettingsView() {
               <option value="auto"      ${(s.advisor?.provider||'auto') === 'auto'      ? 'selected' : ''}>Auto-detect from key</option>
               <option value="anthropic" ${s.advisor?.provider === 'anthropic' ? 'selected' : ''}>Anthropic (Claude Haiku)</option>
               <option value="openai"    ${s.advisor?.provider === 'openai'    ? 'selected' : ''}>OpenAI (GPT-4o mini)</option>
-              <option value="gemini"    ${s.advisor?.provider === 'gemini'    ? 'selected' : ''}>Google Gemini 2.0 Flash</option>
+              <option value="gemini"    ${s.advisor?.provider === 'gemini'    ? 'selected' : ''}>Google Gemini 3.6 Flash</option>
             </select>
           </div>
         </div>
@@ -1013,6 +1063,14 @@ export function renderSettingsView() {
               placeholder="Tell the advisor about yourself: your goals, preferences, what you use Notely for…" rows="5">${escapeHtml(s.advisor?.systemPrompt || '')}</textarea>
           </div>
         </div>
+        <div class="settings-row">
+          <div class="settings-row-label">History limit</div>
+          <div class="settings-row-control">
+            <input type="number" class="settings-text-input" id="advisor-history-input"
+              value="${s.advisor?.historyMax ?? 20}" min="1" max="100" style="width:80px" />
+            <span class="settings-row-hint">Max saved conversations (default 20)</span>
+          </div>
+        </div>
       </div>
     </div>`;
 
@@ -1022,6 +1080,9 @@ export function renderSettingsView() {
   function saveAdvisorField(field, value) {
     if (!s.advisor) s.advisor = {};
     s.advisor[field] = value;
+    // Keep store.settings in sync so the advisor view reads the live value
+    if (!store.settings.advisor) store.settings.advisor = {};
+    store.settings.advisor[field] = value;
     try { localStorage.setItem('notely-settings', JSON.stringify(s)); } catch {}
     // Update sidebar label live
     document.querySelectorAll('[data-action="select-advisor"] .sidebar-item-text')
@@ -1033,8 +1094,12 @@ export function renderSettingsView() {
     ?.addEventListener('change', e => saveAdvisorField('provider', e.target.value));
   document.getElementById('advisor-key-input')
     ?.addEventListener('change', e => saveAdvisorField('apiKey', e.target.value.trim()));
+  document.getElementById('advisor-key-input')
+    ?.addEventListener('blur', e => saveAdvisorField('apiKey', e.target.value.trim()));
   document.getElementById('advisor-prompt-input')
     ?.addEventListener('change', e => saveAdvisorField('systemPrompt', e.target.value));
+  document.getElementById('advisor-history-input')
+    ?.addEventListener('change', e => saveAdvisorField('historyMax', Math.max(1, parseInt(e.target.value) || 20)));
 }
 
 // Simple markdown → HTML renderer (safe, no external deps)
@@ -1070,6 +1135,26 @@ export function renderAdvisorView() {
 
   const name = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
   const hasKey = !!(store.settings?.advisor?.apiKey);
+  const currentId = getCurrentConvId();
+  const allConvs = getAllConversations();
+
+  // Conversation history sidebar
+  const convItems = allConvs.map(c => {
+    const isActive = c.id === currentId && store.advisorMessages.length > 0;
+    const title = escapeHtml(c.title || 'Conversation');
+    const d = new Date(c.updatedAt || c.createdAt);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+    const dateLabel = sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : d.toDateString() === yesterday.toDateString() ? 'Yesterday'
+      : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return `<div class="adv-conv-item${isActive ? ' adv-conv-active' : ''}"
+                 data-action="advisor-load-conv" data-conv-id="${escapeHtml(c.id)}">
+              <div class="adv-conv-title">${title}</div>
+              <div class="adv-conv-date">${dateLabel}</div>
+            </div>`;
+  }).join('');
 
   const messagesHTML = store.advisorMessages.length
     ? store.advisorMessages.map(m => `
@@ -1086,47 +1171,50 @@ export function renderAdvisorView() {
       </div>`;
 
   el.innerHTML = `
-    <div class="feature-view-layout advisor-layout">
-      <div class="feature-view-header">
-        <div class="feature-view-title">${name}</div>
-        ${store.advisorMessages.length > 0
-          ? `<button class="adv-clear-btn" data-action="advisor-clear" title="New conversation">
-               <i data-lucide="rotate-ccw" width="14" height="14"></i> New conversation
-             </button>` : ''}
-      </div>
-      <div class="adv-chat">
-        <div class="adv-messages" id="adv-messages">
-          ${messagesHTML}
-          ${store.advisorLoading ? '<div class="adv-msg adv-msg-assistant"><div class="adv-msg-avatar"><i data-lucide="bot" width="14" height="14"></i></div><div class="adv-msg-bubble adv-msg-thinking"><span class="adv-dots"><span>.</span><span>.</span><span>.</span></span></div></div>' : ''}
+    <div class="advisor-layout">
+      <div class="adv-sidebar">
+        <button class="adv-new-btn" data-action="advisor-new-conv">
+          <i data-lucide="plus" width="14" height="14"></i> New chat
+        </button>
+        <div class="adv-conv-list">
+          ${convItems || '<div class="adv-conv-empty">No past conversations</div>'}
         </div>
-        <div class="adv-input-row">
-          <textarea class="adv-input" id="adv-input" rows="1"
-            placeholder="${hasKey ? 'Ask anything…' : 'Configure API key in Settings first'}"
-            ${hasKey ? '' : 'disabled'}
-            autocomplete="off"></textarea>
-          <button class="adv-send-btn" data-action="advisor-send"
-            ${hasKey && !store.advisorLoading ? '' : 'disabled'}
-            title="Send (Enter)">
-            <i data-lucide="send" width="16" height="16"></i>
-          </button>
+      </div>
+      <div class="adv-main">
+        <div class="feature-view-header">
+          <div class="feature-view-title">${name}</div>
+        </div>
+        <div class="adv-chat">
+          <div class="adv-messages" id="adv-messages">
+            ${messagesHTML}
+            ${store.advisorLoading ? '<div class="adv-msg adv-msg-assistant"><div class="adv-msg-avatar"><i data-lucide="bot" width="14" height="14"></i></div><div class="adv-msg-bubble adv-msg-thinking"><span class="adv-dots"><span>.</span><span>.</span><span>.</span></span></div></div>' : ''}
+          </div>
+          <div class="adv-input-row">
+            <textarea class="adv-input" id="adv-input" rows="1"
+              placeholder="${hasKey ? 'Ask anything…' : 'Configure API key in Settings first'}"
+              ${hasKey ? '' : 'disabled'}
+              autocomplete="off"></textarea>
+            <button class="adv-send-btn" data-action="advisor-send"
+              ${hasKey && !store.advisorLoading ? '' : 'disabled'}
+              title="Send (Enter)">
+              <i data-lucide="send" width="16" height="16"></i>
+            </button>
+          </div>
         </div>
       </div>
     </div>`;
 
   if (window.lucide) window.lucide.createIcons();
 
-  // Auto-scroll messages to bottom
   const msgsEl = document.getElementById('adv-messages');
   if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
 
-  // Auto-resize textarea on input
   const input = document.getElementById('adv-input');
   if (input) {
     input.addEventListener('input', () => {
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
     });
-    // Enter to send, Shift+Enter for newline
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();

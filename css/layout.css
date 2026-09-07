@@ -1427,13 +1427,84 @@
 
 /* ── AI Advisor ────────────────────────────────────────────────── */
 
-/* Full view layout */
+/* Advisor two-panel layout */
 .advisor-layout {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   overflow: hidden;
-  padding-bottom: 0;
+}
+
+/* History sidebar */
+.adv-sidebar {
+  width: 220px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.adv-new-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  font-weight: 500;
+}
+.adv-new-btn:hover { opacity: 0.9; }
+
+.adv-conv-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--space-xs) var(--space-sm);
+}
+
+.adv-conv-empty {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  padding: var(--space-sm) var(--space-xs);
+}
+
+.adv-conv-item {
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+.adv-conv-item:hover { background: var(--color-border-muted); }
+.adv-conv-active { background: var(--color-primary-muted) !important; }
+.adv-conv-active .adv-conv-title { color: var(--color-primary); }
+
+.adv-conv-title {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.adv-conv-date {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+/* Main chat panel */
+.adv-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .adv-chat {

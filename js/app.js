@@ -3,7 +3,7 @@
 import { db, waitForReady } from './db.js';
 import { store } from './store.js';
 import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderAdvisorView, renderSettingsView, showNotePanels, showConfirmDialog, showToast } from './render.js';
-import { runAdvisor, clearAdvisorHistory } from './advisor.js';
+import { runAdvisor, clearAdvisorHistory, startNewConversation, loadConversation, getAllConversations } from './advisor.js';
 import { saveSettings } from './settings.js';
 import { initTheme, toggleTheme } from './theme.js';
 import { initEditor, refreshAttachmentTray } from './editor.js';
@@ -243,6 +243,10 @@ function setupEventListeners() {
   document.getElementById('calendar-view')?.addEventListener('click', handleDashboardClick);
   document.getElementById('calendar-view')?.addEventListener('keydown', handleDashboardKeydown);
 
+  // Advisor view event delegation
+  document.getElementById('advisor-view')?.addEventListener('click', handleDashboardClick);
+  document.getElementById('advisor-view')?.addEventListener('keydown', handleDashboardKeydown);
+
   // Header contextual slot (add-widget menu when on dashboard)
   document.getElementById('header-contextual')?.addEventListener('click', handleDashboardClick);
 
@@ -396,37 +400,6 @@ async function handleSidebarClick(event) {
     store.currentNote = null;
     renderSidebar();
     renderAdvisorView();
-
-  } else if (action === 'advisor-send' || action === 'advisor-widget-send') {
-    const isWidget = action === 'advisor-widget-send';
-    const inputEl = document.getElementById(isWidget ? 'adv-widget-input' : 'adv-input');
-    const text = inputEl?.value.trim();
-    if (!text || store.advisorLoading) return;
-    if (inputEl) { inputEl.value = ''; inputEl.style.height = 'auto'; }
-    store.advisorLoading = true;
-    const rerender = () => { if (store.currentView === 'advisor') renderAdvisorView(); else renderDashboard(); };
-    rerender();
-    try {
-      await runAdvisor(text, rerender);
-    } catch (err) {
-      store.advisorMessages.push({ role: 'assistant', text: `Error: ${err.message}` });
-    } finally {
-      store.advisorLoading = false;
-      rerender();
-    }
-
-  } else if (action === 'advisor-clear') {
-    clearAdvisorHistory();
-    renderAdvisorView();
-
-  } else if (action === 'add-advisor-widget') {
-    const already = store.settings.dashboard.layout.some(l => l.id === 'advisor');
-    if (!already) {
-      store.settings.dashboard.layout.push({ id: 'advisor', x: 0, y: 9999, w: 4, h: 6 });
-      saveSettings(store.settings);
-    }
-    document.getElementById('add-widget-menu')?.setAttribute('hidden', '');
-    renderDashboard();
 
   } else if (action === 'select-settings') {
     setRoute('settings');
@@ -744,6 +717,43 @@ async function handleDashboardClick(event) {
     const fresh = loadSettings();
     s.dashboard.layout = fresh.dashboard.layout;
     saveSettings(s);
+    renderDashboard();
+
+  } else if (action === 'advisor-send' || action === 'advisor-widget-send') {
+    const isWidget = action === 'advisor-widget-send';
+    const inputEl = document.getElementById(isWidget ? 'adv-widget-input' : 'adv-input');
+    const text = inputEl?.value.trim();
+    if (!text || store.advisorLoading) return;
+    if (inputEl) { inputEl.value = ''; inputEl.style.height = 'auto'; }
+    store.advisorLoading = true;
+    const rerender = () => { if (store.currentView === 'advisor') renderAdvisorView(); else renderDashboard(); };
+    rerender();
+    try {
+      await runAdvisor(text, rerender);
+    } catch (err) {
+      store.advisorMessages.push({ role: 'assistant', text: `Error: ${err.message}` });
+    } finally {
+      store.advisorLoading = false;
+      rerender();
+    }
+
+  } else if (action === 'advisor-clear' || action === 'advisor-new-conv') {
+    startNewConversation();
+    renderAdvisorView();
+
+  } else if (action === 'advisor-load-conv') {
+    const convId = target.dataset.convId;
+    const convs = getAllConversations();
+    const conv = convs.find(c => c.id === convId);
+    if (conv) { loadConversation(conv); renderAdvisorView(); }
+
+  } else if (action === 'add-advisor-widget') {
+    const already = store.settings.dashboard.layout.some(l => l.id === 'advisor');
+    if (!already) {
+      store.settings.dashboard.layout.push({ id: 'advisor', x: 0, y: 9999, w: 4, h: 6 });
+      saveSettings(store.settings);
+    }
+    document.getElementById('add-widget-menu')?.setAttribute('hidden', '');
     renderDashboard();
   }
 }
