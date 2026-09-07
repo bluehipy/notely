@@ -1,0 +1,4 @@
+node_modules/
+sqlite-wasm/
+test-*.js
+package-lock.json

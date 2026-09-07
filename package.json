@@ -1,0 +1,15 @@
+{
+  "name": "notely",
+  "version": "1.0.0",
+  "description": "Friendly note and list manager",
+  "scripts": {
+    "serve": "serve ."
+  },
+  "devDependencies": {
+    "puppeteer": "^25.10.0",
+    "serve": "^14.2.3"
+  },
+  "dependencies": {
+    "@sqlite.org/sqlite-wasm": "^3.47.0-build1"
+  }
+}
