@@ -3,6 +3,7 @@
 const DEFAULTS = {
   advisor: {
     name: 'AI Advisor',
+    provider: 'auto',
     apiKey: '',
     systemPrompt: ''
   },

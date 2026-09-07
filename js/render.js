@@ -988,11 +988,22 @@ export function renderSettingsView() {
           </div>
         </div>
         <div class="settings-row">
+          <div class="settings-row-label">Provider</div>
+          <div class="settings-row-control">
+            <select class="settings-select" id="advisor-provider-input">
+              <option value="auto"      ${(s.advisor?.provider||'auto') === 'auto'      ? 'selected' : ''}>Auto-detect from key</option>
+              <option value="anthropic" ${s.advisor?.provider === 'anthropic' ? 'selected' : ''}>Anthropic (Claude Haiku)</option>
+              <option value="openai"    ${s.advisor?.provider === 'openai'    ? 'selected' : ''}>OpenAI (GPT-4o mini)</option>
+              <option value="gemini"    ${s.advisor?.provider === 'gemini'    ? 'selected' : ''}>Google Gemini 2.0 Flash</option>
+            </select>
+          </div>
+        </div>
+        <div class="settings-row">
           <div class="settings-row-label">API Key</div>
           <div class="settings-row-control">
             <input type="password" class="settings-text-input" id="advisor-key-input"
-              value="${escapeHtml(s.advisor?.apiKey || '')}" placeholder="sk-ant-… or sk-…" autocomplete="off" />
-            <span class="settings-row-hint">Anthropic (sk-ant-) or OpenAI (sk-) key — stored locally only</span>
+              value="${escapeHtml(s.advisor?.apiKey || '')}" placeholder="sk-ant-… / sk-… / AIza…" autocomplete="off" />
+            <span class="settings-row-hint">Stored locally in your browser only — never sent anywhere else</span>
           </div>
         </div>
         <div class="settings-row settings-row-tall">
@@ -1018,6 +1029,8 @@ export function renderSettingsView() {
   }
   document.getElementById('advisor-name-input')
     ?.addEventListener('change', e => saveAdvisorField('name', e.target.value.trim() || 'AI Advisor'));
+  document.getElementById('advisor-provider-input')
+    ?.addEventListener('change', e => saveAdvisorField('provider', e.target.value));
   document.getElementById('advisor-key-input')
     ?.addEventListener('change', e => saveAdvisorField('apiKey', e.target.value.trim()));
   document.getElementById('advisor-prompt-input')

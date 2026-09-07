@@ -130,13 +130,6 @@ const TOOLS = [
   }
 ];
 
-function toOpenAITools(tools) {
-  return tools.map(t => ({
-    type: 'function',
-    function: { name: t.name, description: t.description, parameters: t.input_schema }
-  }));
-}
-
 // ── Tool executor ────────────────────────────────────────────────
 
 async function executeTool(name, input) {
@@ -233,12 +226,45 @@ async function executeTool(name, input) {
   }
 }
 
-// ── Provider detection ───────────────────────────────────────────
+// ── Provider resolution ──────────────────────────────────────────
 
-function detectProvider(key) {
-  if (!key) return null;
+let _sessionProvider = null; // tracks provider for current history
+
+function resolveProvider(cfg) {
+  const explicit = cfg.provider;
+  if (explicit && explicit !== 'auto') return explicit;
+  const key = cfg.apiKey || '';
   if (key.startsWith('sk-ant-')) return 'anthropic';
-  return 'openai'; // sk-*, etc.
+  if (key.startsWith('AIza'))    return 'gemini';
+  if (key)                       return 'openai';
+  return null;
+}
+
+// ── Tool format converters ───────────────────────────────────────
+
+function toOpenAITools(tools) {
+  return tools.map(t => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.input_schema }
+  }));
+}
+
+function geminiSchema(s) {
+  if (!s) return { type: 'OBJECT', properties: {} };
+  const cvt = o => {
+    const r = {};
+    if (o.type)        r.type = o.type.toUpperCase();
+    if (o.description) r.description = o.description;
+    if (o.enum)        r.enum = o.enum;
+    if (o.properties)  r.properties = Object.fromEntries(Object.entries(o.properties).map(([k,v]) => [k, cvt(v)]));
+    if (o.required)    r.required = o.required;
+    return r;
+  };
+  return cvt(s);
+}
+
+function toGeminiTools(tools) {
+  return [{ function_declarations: tools.map(t => ({ name: t.name, description: t.description, parameters: geminiSchema(t.input_schema) })) }];
 }
 
 // ── API calls ────────────────────────────────────────────────────
@@ -252,18 +278,9 @@ async function callAnthropic(messages, systemPrompt, apiKey) {
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-client-side-api-key-usage': 'true'
     },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages,
-      tools: TOOLS
-    })
+    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, system: systemPrompt, messages, tools: TOOLS })
   });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e.error?.message || `Anthropic API error ${res.status}`);
-  }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `Anthropic ${res.status}`); }
   return res.json();
 }
 
@@ -271,103 +288,149 @@ async function callOpenAI(messages, systemPrompt, apiKey) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      tools: toOpenAITools(TOOLS),
-      tool_choice: 'auto'
-    })
+    body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'system', content: systemPrompt }, ...messages], tools: toOpenAITools(TOOLS), tool_choice: 'auto' })
   });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e.error?.message || `OpenAI API error ${res.status}`);
-  }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `OpenAI ${res.status}`); }
   return res.json();
+}
+
+async function callGemini(messages, systemPrompt, apiKey) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: messages,
+        tools: toGeminiTools(TOOLS)
+      })
+    }
+  );
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `Gemini ${res.status}`); }
+  return res.json();
+}
+
+// ── Parse provider responses ─────────────────────────────────────
+
+function parseAnthropic(raw) {
+  return {
+    text: raw.content.filter(c => c.type === 'text').map(c => c.text).join(''),
+    toolCalls: raw.content.filter(c => c.type === 'tool_use').map(c => ({ id: c.id, name: c.name, input: c.input })),
+    hasTools: raw.stop_reason === 'tool_use',
+    rawContent: raw.content
+  };
+}
+
+function parseOpenAI(raw) {
+  const msg = raw.choices[0].message;
+  return {
+    text: msg.content || '',
+    toolCalls: (msg.tool_calls || []).map(tc => ({ id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments || '{}') })),
+    hasTools: raw.choices[0].finish_reason === 'tool_calls',
+    rawMsg: msg
+  };
+}
+
+function parseGemini(raw) {
+  const parts = raw.candidates?.[0]?.content?.parts || [];
+  return {
+    text: parts.filter(p => p.text).map(p => p.text).join(''),
+    toolCalls: parts.filter(p => p.functionCall).map((p, i) => ({ id: `fc_${i}_${Date.now()}`, name: p.functionCall.name, input: p.functionCall.args || {} })),
+    hasTools: parts.some(p => p.functionCall),
+    rawParts: parts
+  };
 }
 
 // ── Agent loop ───────────────────────────────────────────────────
 
 export async function runAdvisor(userText, onUpdate) {
   const cfg = store.settings.advisor || {};
-  const apiKey = cfg.apiKey;
-  if (!apiKey) throw new Error('No API key configured — go to Settings → AI Advisor to add one.');
+  if (!cfg.apiKey) throw new Error('No API key configured — go to Settings → AI Advisor to add one.');
 
-  const provider = detectProvider(apiKey);
-  if (!provider) throw new Error('Cannot detect provider from API key prefix.');
+  const provider = resolveProvider(cfg);
+  if (!provider) throw new Error('Cannot determine provider. Check your API key or set Provider in Settings.');
 
-  const pad = n => String(n).padStart(2, '0');
+  // Reset history if provider changed mid-session
+  if (_sessionProvider && _sessionProvider !== provider) {
+    _apiHistory = [];
+    store.advisorMessages = store.advisorMessages.filter(m => !m._historyOnly);
+  }
+  _sessionProvider = provider;
+
   const today = new Date();
   const todayStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const name = cfg.name || 'AI Advisor';
   const userContext = (cfg.systemPrompt || '').trim();
-
   const systemPrompt = [
     `You are ${name}, a helpful personal assistant built into Notely — a personal productivity app.`,
     userContext ? `\nUser context:\n${userContext}` : '',
     `\nToday is ${todayStr}.`,
-    `\nYou have tools to manage the user's tasks, notes, and calendar. Use them to act on requests directly — don't just tell the user what to do. Be concise.`
+    `\nUse your tools to act on requests directly. Be concise.`
   ].join('');
 
-  // Append user turn to both display and API history
+  // Append user message to display + provider history
   store.advisorMessages.push({ role: 'user', text: userText });
-  _apiHistory.push({ role: 'user', content: userText });
+  if (provider === 'gemini') {
+    _apiHistory.push({ role: 'user', parts: [{ text: userText }] });
+  } else {
+    _apiHistory.push({ role: 'user', content: userText });
+  }
   onUpdate();
 
   let iterations = 0;
   while (iterations++ < 10) {
-    let parsed;
-    try {
-      if (provider === 'anthropic') {
-        const raw = await callAnthropic(_apiHistory, systemPrompt, apiKey);
-        const text = raw.content.filter(c => c.type === 'text').map(c => c.text).join('');
-        const toolCalls = raw.content.filter(c => c.type === 'tool_use').map(c => ({ id: c.id, name: c.name, input: c.input }));
-        parsed = { text, toolCalls, stopped: raw.stop_reason !== 'tool_use', rawContent: raw.content };
-      } else {
-        const raw = await callOpenAI(_apiHistory, systemPrompt, apiKey);
-        const msg = raw.choices[0].message;
-        const text = msg.content || '';
-        const toolCalls = (msg.tool_calls || []).map(tc => ({
-          id: tc.id, name: tc.function.name,
-          input: JSON.parse(tc.function.arguments || '{}')
-        }));
-        parsed = { text, toolCalls, stopped: raw.choices[0].finish_reason !== 'tool_calls', rawMsg: msg };
-      }
-    } catch (err) {
-      throw err;
-    }
+    const raw = provider === 'anthropic' ? await callAnthropic(_apiHistory, systemPrompt, cfg.apiKey)
+              : provider === 'gemini'    ? await callGemini(_apiHistory, systemPrompt, cfg.apiKey)
+              :                            await callOpenAI(_apiHistory, systemPrompt, cfg.apiKey);
 
-    if (parsed.toolCalls.length > 0) {
-      // Add assistant message with tool calls to API history
+    const parsed = provider === 'anthropic' ? parseAnthropic(raw)
+                 : provider === 'gemini'    ? parseGemini(raw)
+                 :                            parseOpenAI(raw);
+
+    if (parsed.hasTools && parsed.toolCalls.length > 0) {
+      // Record assistant turn with tool calls in history
       if (provider === 'anthropic') {
         _apiHistory.push({ role: 'assistant', content: parsed.rawContent });
+      } else if (provider === 'gemini') {
+        const modelParts = [];
+        if (parsed.text) modelParts.push({ text: parsed.text });
+        parsed.toolCalls.forEach(c => modelParts.push({ functionCall: { name: c.name, args: c.input } }));
+        _apiHistory.push({ role: 'model', parts: modelParts });
       } else {
         _apiHistory.push({ role: 'assistant', content: parsed.text || null, tool_calls: parsed.rawMsg.tool_calls });
       }
 
-      // Execute tools and collect results
+      // Execute all tools, collect results
       const toolSummary = [];
+      const anthropicResults = [];
+      const geminiResults   = [];
       for (const call of parsed.toolCalls) {
         const result = await executeTool(call.name, call.input);
         toolSummary.push(call.name.replace(/_/g, ' '));
         if (provider === 'anthropic') {
-          _apiHistory.push({
-            role: 'user',
-            content: [{ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(result) }]
-          });
+          anthropicResults.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(result) });
+        } else if (provider === 'gemini') {
+          geminiResults.push({ functionResponse: { name: call.name, response: { content: JSON.stringify(result) } } });
         } else {
           _apiHistory.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
         }
       }
+      // Batch results into one turn for Anthropic and Gemini
+      if (anthropicResults.length) _apiHistory.push({ role: 'user', content: anthropicResults });
+      if (geminiResults.length)    _apiHistory.push({ role: 'user', parts: geminiResults });
 
-      // Show a subtle "working" message while tools run
       const workingIdx = store.advisorMessages.push({ role: 'assistant', text: `_Using: ${toolSummary.join(', ')}…_`, working: true }) - 1;
       onUpdate();
-      // Remove the working indicator before adding final response
       store.advisorMessages.splice(workingIdx, 1);
 
     } else {
       // Final text response
-      _apiHistory.push({ role: 'assistant', content: parsed.text });
+      if (provider === 'gemini') {
+        _apiHistory.push({ role: 'model', parts: [{ text: parsed.text }] });
+      } else {
+        _apiHistory.push({ role: 'assistant', content: parsed.text });
+      }
       store.advisorMessages.push({ role: 'assistant', text: parsed.text });
       onUpdate();
       break;
