@@ -149,15 +149,15 @@ function createSchema(db) {
     )
   `);
 
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at ASC)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id)`);
-
-  // Migrations for existing installs
+  // Migrations for existing installs — must run before indexes that reference new columns
   try { db.exec(`ALTER TABLE tasks ADD COLUMN list_id INTEGER REFERENCES task_lists(id) ON DELETE CASCADE`); } catch {}
   try { db.exec(`ALTER TABLE tasks ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1`); } catch {}
 
   // Assign orphan tasks (list_id IS NULL) to the first list
   db.exec(`UPDATE tasks SET list_id = (SELECT id FROM task_lists ORDER BY id LIMIT 1) WHERE list_id IS NULL`);
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at ASC)`);
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id)`); } catch {}
 
   // Events table
   db.exec(`
