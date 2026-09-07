@@ -291,12 +291,20 @@ function getWidgetLabel(id) {
     const note = store.notes.find(n => n.id === parseInt(id.slice(5)));
     return note?.title || 'Note';
   }
+  if (id.startsWith('tasklist-')) {
+    const list = store.taskLists.find(l => l.id === parseInt(id.slice(9)));
+    return list?.name || 'Task List';
+  }
   return WIDGET_LABELS[id] || id;
 }
 
 function getWidgetIcon(id) {
   if (id.startsWith('notebook-')) return 'book';
   if (id.startsWith('note-'))     return 'file-text';
+  if (id.startsWith('tasklist-')) {
+    const list = store.taskLists.find(l => l.id === parseInt(id.slice(9)));
+    return list?.type === 'priority' ? 'bell' : list?.type === 'quantity' ? 'shopping-cart' : 'check-square';
+  }
   return WIDGET_ICONS[id] || 'layout-dashboard';
 }
 
@@ -373,9 +381,39 @@ function buildNoteWidgetContent(noteId) {
     </div>`;
 }
 
+function buildTaskListWidgetContent(listId, ds) {
+  const list = store.taskLists.find(l => l.id === listId);
+  if (!list) return '<div class="dashboard-empty">Task list not found</div>';
+  const listType = list.type;
+  const listTasks = store.tasks.filter(t => t.list_id === listId);
+  const pending   = listTasks.filter(t => !t.completed);
+  const completed = listTasks.filter(t => t.completed);
+  const maxH = `${(ds?.tasksMaxVisible ?? 8) * 38}px`;
+  const placeholder = listType === 'quantity' ? 'Add an item…' : 'Add a task…';
+  const qtyInput = listType === 'quantity'
+    ? `<input class="task-input task-qty-add" id="task-qty-input" type="number" min="1" max="9999" value="1" title="Quantity" />`
+    : '';
+  return `
+    <div data-widget-list-id="${listId}">
+      <div class="task-add-row dash-task-add-row">
+        <input class="task-input" id="task-input" placeholder="${placeholder}" maxlength="200" autocomplete="off">
+        ${qtyInput}
+        <button class="task-add-btn" data-action="add-task" title="Add"><i data-lucide="plus"></i></button>
+      </div>
+      <div class="task-list dash-task-list" style="max-height:${maxH}; overflow-y:auto;">
+        ${pending.map(t => buildTaskItemHTML(t, listType)).join('')}
+        ${pending.length === 0 && completed.length === 0 ? '<div class="task-empty">No items yet</div>' : ''}
+        ${completed.length > 0 ? `
+          <div class="task-completed-heading">Done · ${completed.length}</div>
+          ${completed.map(t => buildTaskItemHTML(t, listType)).join('')}` : ''}
+      </div>
+    </div>`;
+}
+
 function buildWidgetContent(id, ds) {
-  if (id.startsWith('notebook-')) return buildNotebookWidgetContent(parseInt(id.slice(9)));
-  if (id.startsWith('note-'))     return buildNoteWidgetContent(parseInt(id.slice(5)));
+  if (id.startsWith('notebook-'))  return buildNotebookWidgetContent(parseInt(id.slice(9)));
+  if (id.startsWith('note-'))      return buildNoteWidgetContent(parseInt(id.slice(5)));
+  if (id.startsWith('tasklist-'))  return buildTaskListWidgetContent(parseInt(id.slice(9)), ds);
   switch (id) {
     case 'tasks':       return buildTasksContent(ds);
     case 'recentNotes': return buildRecentNotesContent(ds);
@@ -418,7 +456,7 @@ export function renderDashboard() {
   const items = layout.filter(item => ds.widgets[item.id] !== false);
 
   const itemsHTML = items.map(item => {
-    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-');
+    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-') || item.id.startsWith('tasklist-');
     const closeBtn = isCustom
       ? `<button class="dash-widget-close" data-action="remove-widget" data-widget-id="${item.id}" title="Remove widget"><i data-lucide="x" width="12" height="12"></i></button>`
       : '';
@@ -448,6 +486,12 @@ export function renderDashboard() {
     </div>`;
 
   // Inject add-widget button into header, hide search
+  const tlItems = store.taskLists.map(list => {
+    const icon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
+    return `<div class="dash-add-menu-item" data-action="add-tasklist-widget" data-id="${list.id}">
+      <i data-lucide="${icon}" width="12" height="12"></i> ${escapeHtml(list.name)}
+    </div>`;
+  }).join('');
   const nbItems = store.notebooks.map(nb => `
     <div class="dash-add-menu-item" data-action="add-notebook-widget" data-id="${nb.id}">
       <i data-lucide="book" width="12" height="12"></i> ${escapeHtml(nb.name)}
@@ -462,6 +506,7 @@ export function renderDashboard() {
       <div class="dash-add-menu-wrap">
         <button class="dash-header-add-btn" data-action="toggle-add-widget-menu">+ Add widget</button>
         <div class="dash-add-widget-menu" id="add-widget-menu" hidden>
+          ${store.taskLists.length ? `<div class="dash-add-menu-section">Task Lists</div>${tlItems}` : ''}
           ${store.notebooks.length ? `<div class="dash-add-menu-section">Notebooks</div>${nbItems}` : ''}
           <div class="dash-add-menu-section">Notes</div>
           ${noteItems || '<div class="dash-add-menu-item dash-add-menu-empty">No notes yet</div>'}

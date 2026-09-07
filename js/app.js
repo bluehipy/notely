@@ -542,11 +542,13 @@ async function handleDashboardClick(event) {
     const input = document.getElementById('task-input');
     const text = input?.value.trim();
     if (text) {
-      const list = store.taskLists.find(l => l.id === store.currentTaskList);
+      const widgetListId = parseInt(target.closest('[data-widget-list-id]')?.dataset?.widgetListId) || null;
+      const listId = widgetListId || store.currentTaskList;
+      const list = store.taskLists.find(l => l.id === listId);
       const qty = list?.type === 'quantity'
         ? (parseInt(document.getElementById('task-qty-input')?.value) || 1)
         : 1;
-      await addTask(text, qty);
+      await addTask(text, qty, listId);
       if (input) input.value = '';
       const qtyInput = document.getElementById('task-qty-input');
       if (qtyInput) qtyInput.value = '1';
@@ -639,6 +641,15 @@ async function handleDashboardClick(event) {
       setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
     }
 
+  } else if (action === 'add-tasklist-widget') {
+    const widgetId = `tasklist-${target.dataset.id}`;
+    const layout = store.settings.dashboard.layout;
+    if (!layout.find(l => l.id === widgetId)) {
+      layout.push({ id: widgetId, x: 0, y: 9999, w: 4, h: 5 });
+      saveSettings(store.settings);
+    }
+    renderDashboard();
+
   } else if (action === 'add-notebook-widget') {
     const widgetId = `notebook-${target.dataset.id}`;
     const layout = store.settings.dashboard.layout;
@@ -682,11 +693,13 @@ async function handleDashboardKeydown(event) {
     const input = document.getElementById('task-input');
     const text = input?.value.trim();
     if (text) {
-      const list = store.taskLists.find(l => l.id === store.currentTaskList);
+      const widgetListId = parseInt(event.target.closest('[data-widget-list-id]')?.dataset?.widgetListId) || null;
+      const listId = widgetListId || store.currentTaskList;
+      const list = store.taskLists.find(l => l.id === listId);
       const qty = list?.type === 'quantity'
         ? (parseInt(document.getElementById('task-qty-input')?.value) || 1)
         : 1;
-      await addTask(text, qty);
+      await addTask(text, qty, listId);
       if (input) input.value = '';
       const qtyInput = document.getElementById('task-qty-input');
       if (qtyInput) qtyInput.value = '1';
@@ -805,8 +818,8 @@ async function addCalEvent(title) {
 }
 
 // Add a new task to the current list
-async function addTask(text, quantity = 1) {
-  const listId = store.currentTaskList;
+async function addTask(text, quantity = 1, listId = null) {
+  listId = listId || store.currentTaskList;
   if (!listId) return;
   const result = await db.run(
     'INSERT INTO tasks (list_id, text, quantity) VALUES (?, ?, ?)',
@@ -816,6 +829,7 @@ async function addTask(text, quantity = 1) {
   store.tasks.unshift(newTask);
   sortTasks();
   rerenderActiveView();
+  setTimeout(() => document.getElementById('task-input')?.focus(), 0);
 }
 
 // Create new note
