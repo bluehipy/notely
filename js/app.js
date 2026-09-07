@@ -328,7 +328,21 @@ async function handleSidebarClick(event) {
     renderTasksView();
 
   } else if (action === 'new-task-list') {
-    await showNewTaskListDialog();
+    const result = await db.run("INSERT INTO task_lists (name, type) VALUES ('Untitled', 'basic')");
+    const newList = await db.get('SELECT * FROM task_lists WHERE id = ?', [result.lastInsertId]);
+    store.taskLists.push(newList);
+    store.renamingTaskListId = newList.id;
+    store.currentTaskList = newList.id;
+    store.currentView = 'tasks';
+    store.tasks = [];
+    setRoute('tasklist/' + newList.id);
+    renderSidebar();
+    renderTasksView();
+
+  } else if (action === 'rename-task-list') {
+    event.stopPropagation();
+    store.renamingTaskListId = parseInt(target.dataset.id);
+    renderSidebar();
 
   } else if (action === 'delete-task-list') {
     event.stopPropagation();
@@ -694,6 +708,14 @@ async function handleTasksViewChange(event) {
     await db.run('UPDATE tasks SET quantity = ? WHERE id = ?', [val, taskId]);
     const task = store.tasks.find(t => t.id === taskId);
     if (task) task.quantity = val;
+  } else if (target.dataset.action === 'set-tasklist-type') {
+    const listId = parseInt(target.dataset.listId);
+    const type = target.value;
+    await db.run('UPDATE task_lists SET type = ? WHERE id = ?', [type, listId]);
+    const list = store.taskLists.find(l => l.id === listId);
+    if (list) list.type = type;
+    renderSidebar();
+    renderTasksView();
   }
 }
 
@@ -794,59 +816,6 @@ async function addTask(text, quantity = 1) {
   store.tasks.unshift(newTask);
   sortTasks();
   rerenderActiveView();
-}
-
-async function showNewTaskListDialog() {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'dialog-overlay';
-    overlay.innerHTML = `
-      <div class="dialog-box" style="min-width:320px">
-        <div class="dialog-title">New Task List</div>
-        <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px">
-          <input id="tl-name" class="dialog-input" type="text" placeholder="List name…" maxlength="60" autocomplete="off" />
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <label style="font-size:12px;color:var(--color-text-muted);font-weight:600;letter-spacing:.05em">TYPE</label>
-            <label class="tl-type-row"><input type="radio" name="tl-type" value="priority" checked /> <span><strong>Priority</strong> — tasks with priority bells</span></label>
-            <label class="tl-type-row"><input type="radio" name="tl-type" value="quantity" /> <span><strong>Quantity</strong> — each item has a count (shopping list)</span></label>
-            <label class="tl-type-row"><input type="radio" name="tl-type" value="basic" /> <span><strong>Basic</strong> — simple checklist</span></label>
-          </div>
-        </div>
-        <div class="dialog-actions">
-          <button class="btn btn-ghost" id="tl-cancel">Cancel</button>
-          <button class="btn btn-primary" id="tl-create">Create</button>
-        </div>
-      </div>`;
-    document.getElementById('dialog-container').appendChild(overlay);
-    const nameInput = overlay.querySelector('#tl-name');
-    nameInput.focus();
-
-    const close = () => { overlay.remove(); resolve(null); };
-    overlay.querySelector('#tl-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
-
-    overlay.querySelector('#tl-create').addEventListener('click', async () => {
-      const name = nameInput.value.trim();
-      if (!name) { nameInput.focus(); return; }
-      const type = overlay.querySelector('input[name="tl-type"]:checked')?.value || 'basic';
-      overlay.remove();
-      const result = await db.run('INSERT INTO task_lists (name, type) VALUES (?, ?)', [name, type]);
-      const newList = await db.get('SELECT * FROM task_lists WHERE id = ?', [result.lastInsertId]);
-      store.taskLists.push(newList);
-      store.currentTaskList = newList.id;
-      store.currentView = 'tasks';
-      store.tasks = [];
-      setRoute('tasklist/' + newList.id);
-      renderSidebar();
-      renderTasksView();
-      resolve(newList);
-    });
-
-    nameInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') overlay.querySelector('#tl-create').click();
-      if (e.key === 'Escape') close();
-    });
-  });
 }
 
 // Create new note

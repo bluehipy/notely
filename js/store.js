@@ -27,6 +27,7 @@ export const store = {
 
   // Inline rename state
   renamingNotebookId: null,
+  renamingTaskListId: null,
 
   // Active view: 'notes' | 'dashboard' | 'tasks' | 'calendar' | 'settings'
   currentView: 'notes',

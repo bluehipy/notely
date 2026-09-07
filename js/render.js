@@ -80,12 +80,24 @@ export function renderSidebar() {
       <div class="sidebar-section-header">TASK LISTS</div>
       <div class="sidebar-items">
         ${store.taskLists.map(list => {
+          const isSelected = store.currentTaskList === list.id && store.currentView === 'tasks';
+          const isRenaming = store.renamingTaskListId === list.id;
           const typeIcon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
+          if (isRenaming) {
+            return `
+              <div class="sidebar-item selected" style="position:relative">
+                <i data-lucide="${typeIcon}"></i>
+                <input class="tasklist-rename-input" type="text" value="${escapeHtml(list.name)}"
+                  data-list-id="${list.id}"
+                  style="flex:1;border:none;outline:none;background:transparent;color:var(--color-text-strong);font-size:var(--text-sm);font-family:var(--font-sans);padding:0;min-width:0;"
+                  autofocus />
+              </div>`;
+          }
           return `
-            <div class="sidebar-item ${store.currentTaskList === list.id && store.currentView === 'tasks' ? 'selected' : ''}"
+            <div class="sidebar-item ${isSelected ? 'selected' : ''}"
                  data-action="select-tasklist" data-id="${list.id}" style="position:relative">
               <i data-lucide="${typeIcon}"></i>
-              <span class="sidebar-item-text">${escapeHtml(list.name)}</span>
+              <span class="sidebar-item-text" ${isSelected ? `data-action="rename-task-list" data-id="${list.id}"` : ''} style="${isSelected ? 'cursor:text;' : ''}">${escapeHtml(list.name)}</span>
               <i class="sidebar-item-delete" data-lucide="trash-2" data-action="delete-task-list" data-id="${list.id}"
                  title="Delete list" style="width:14px;height:14px;color:var(--color-danger);opacity:0;transition:opacity 100ms;position:absolute;right:8px;cursor:pointer;"></i>
             </div>`;
@@ -199,6 +211,37 @@ export function renderSidebar() {
       if (e.key === 'Enter') { e.preventDefault(); renameInput.blur(); }
       if (e.key === 'Escape') {
         store.renamingNotebookId = null;
+        renderSidebar();
+      }
+    });
+  }
+
+  // Wire up inline task list rename input if present
+  const tlRenameInput = sidebar.querySelector('.tasklist-rename-input');
+  if (tlRenameInput) {
+    tlRenameInput.select();
+
+    const commitTL = async () => {
+      const { db } = await import('./db.js');
+      const listId = parseInt(tlRenameInput.dataset.listId);
+      const name = tlRenameInput.value.trim() || 'Untitled';
+      try {
+        await db.run('UPDATE task_lists SET name = ? WHERE id = ?', [name, listId]);
+        const list = store.taskLists.find(l => l.id === listId);
+        if (list) list.name = name;
+      } catch (e) {
+        console.error('Failed to rename task list:', e);
+      }
+      store.renamingTaskListId = null;
+      renderSidebar();
+      renderTasksView();
+    };
+
+    tlRenameInput.addEventListener('blur', commitTL);
+    tlRenameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); tlRenameInput.blur(); }
+      if (e.key === 'Escape') {
+        store.renamingTaskListId = null;
         renderSidebar();
       }
     });
@@ -627,6 +670,11 @@ export function renderTasksView() {
       <div class="feature-view-header">
         <div class="feature-view-title">${escapeHtml(listName)}</div>
         ${total > 0 ? `<div class="feature-view-subtitle">${doneCount} of ${total} done</div>` : ''}
+        ${list ? `<select class="tl-type-select" data-action="set-tasklist-type" data-list-id="${list.id}" title="List type">
+          <option value="priority"${listType === 'priority' ? ' selected' : ''}>🔔 Priority</option>
+          <option value="quantity"${listType === 'quantity' ? ' selected' : ''}>🛒 Quantity</option>
+          <option value="basic"${listType === 'basic' ? ' selected' : ''}>☑ Basic</option>
+        </select>` : ''}
       </div>
       <div class="task-add-row tasks-view-add-row">
         <input class="task-input" id="task-input" placeholder="${placeholder}" maxlength="200" autocomplete="off" />

@@ -485,17 +485,19 @@
 .task-qty-add::-webkit-inner-spin-button,
 .task-qty-add::-webkit-outer-spin-button { -webkit-appearance: none; }
 
-/* New task list dialog type rows */
-.tl-type-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--color-text);
+/* Task list type selector in view header */
+.tl-type-select {
+  margin-left: auto;
+  padding: 3px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: 12px;
   cursor: pointer;
-  padding: 4px 0;
 }
-.tl-type-row input[type="radio"] { margin-top: 2px; flex-shrink: 0; }
+.tl-type-select:hover { border-color: var(--color-primary); }
+
 
 .task-completed-heading {
   font-size: var(--text-xs);
