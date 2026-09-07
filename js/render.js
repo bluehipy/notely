@@ -61,20 +61,38 @@ export function renderSidebar() {
   if (!sidebar) return;
 
   const html = `
-    <!-- Dashboard / Tasks / Calendar -->
+    <!-- Dashboard / Calendar -->
     <div class="sidebar-section">
       <div class="sidebar-items">
         <div class="sidebar-item ${store.currentView === 'dashboard' ? 'selected' : ''}" data-action="select-dashboard">
           <i data-lucide="layout-dashboard"></i>
           <span class="sidebar-item-text">Dashboard</span>
         </div>
-        <div class="sidebar-item ${store.currentView === 'tasks' ? 'selected' : ''}" data-action="select-tasks">
-          <i data-lucide="check-square"></i>
-          <span class="sidebar-item-text">Tasks</span>
-        </div>
         <div class="sidebar-item ${store.currentView === 'calendar' ? 'selected' : ''}" data-action="select-calendar">
           <i data-lucide="calendar"></i>
           <span class="sidebar-item-text">Calendar</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Lists Section -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-header">TASK LISTS</div>
+      <div class="sidebar-items">
+        ${store.taskLists.map(list => {
+          const typeIcon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
+          return `
+            <div class="sidebar-item ${store.currentTaskList === list.id && store.currentView === 'tasks' ? 'selected' : ''}"
+                 data-action="select-tasklist" data-id="${list.id}" style="position:relative">
+              <i data-lucide="${typeIcon}"></i>
+              <span class="sidebar-item-text">${escapeHtml(list.name)}</span>
+              <i class="sidebar-item-delete" data-lucide="trash-2" data-action="delete-task-list" data-id="${list.id}"
+                 title="Delete list" style="width:14px;height:14px;color:var(--color-danger);opacity:0;transition:opacity 100ms;position:absolute;right:8px;cursor:pointer;"></i>
+            </div>`;
+        }).join('')}
+        <div class="sidebar-item primary" data-action="new-task-list">
+          <i data-lucide="plus"></i>
+          <span class="sidebar-item-text">New Task List</span>
         </div>
       </div>
     </div>
@@ -188,20 +206,28 @@ export function renderSidebar() {
 }
 
 // Shared task item HTML builder (used by dashboard and tasks view)
-function buildTaskItemHTML(task) {
-  const bells = [5,4,3,2,1].map(n => `
-    <button class="task-bell${n <= task.priority ? ' task-bell-active' : ''}"
-            data-action="set-task-priority" data-id="${task.id}" data-priority="${n}"
-            title="Priority ${n}">
-      <i data-lucide="bell" width="10" height="10"></i>
-    </button>`).join('');
+function buildTaskItemHTML(task, listType = 'basic') {
+  let secondary = '';
+  if (listType === 'priority') {
+    secondary = `<div class="task-bells">${
+      [5,4,3,2,1].map(n => `
+        <button class="task-bell${n <= task.priority ? ' task-bell-active' : ''}"
+                data-action="set-task-priority" data-id="${task.id}" data-priority="${n}"
+                title="Priority ${n}">
+          <i data-lucide="bell" width="10" height="10"></i>
+        </button>`).join('')
+    }</div>`;
+  } else if (listType === 'quantity') {
+    secondary = `<input class="task-qty" type="number" min="1" max="9999" value="${task.quantity ?? 1}"
+                        data-action="set-task-quantity" data-id="${task.id}" title="Quantity" />`;
+  }
   return `
   <div class="task-item${task.completed ? ' completed' : ''}" data-task-id="${task.id}">
     <button class="task-check" data-action="toggle-task" data-id="${task.id}" title="${task.completed ? 'Mark incomplete' : 'Mark complete'}">
       <i data-lucide="${task.completed ? 'check-circle-2' : 'circle'}"></i>
     </button>
     <span class="task-text">${escapeHtml(task.text)}</span>
-    <div class="task-bells">${bells}</div>
+    ${secondary}
     <button class="task-delete" data-action="delete-task" data-id="${task.id}" title="Delete task">
       <i data-lucide="x"></i>
     </button>
@@ -232,20 +258,26 @@ function getWidgetIcon(id) {
 }
 
 function buildTasksContent(ds) {
-  const pending   = store.tasks.filter(t => !t.completed);
-  const completed = store.tasks.filter(t => t.completed);
+  const firstList = store.taskLists[0];
+  if (!firstList) {
+    return `<div class="dashboard-empty">No task lists yet</div>`;
+  }
+  const listType = firstList.type;
+  const listTasks = store.tasks.filter(t => t.list_id === firstList.id);
+  const pending   = listTasks.filter(t => !t.completed);
+  const completed = listTasks.filter(t => t.completed);
   const maxH = `${ds.tasksMaxVisible * 38}px`;
   return `
     <div class="task-add-row dash-task-add-row">
-      <input class="task-input" id="task-input" placeholder="Add a task…" maxlength="200" autocomplete="off">
+      <input class="task-input" id="task-input" placeholder="Add…" maxlength="200" autocomplete="off">
       <button class="task-add-btn" data-action="add-task" title="Add task"><i data-lucide="plus"></i></button>
     </div>
     <div class="task-list dash-task-list" style="max-height:${maxH}; overflow-y:auto;">
-      ${pending.map(buildTaskItemHTML).join('')}
+      ${pending.map(t => buildTaskItemHTML(t, listType)).join('')}
       ${pending.length === 0 && completed.length === 0 ? '<div class="task-empty">No tasks yet</div>' : ''}
       ${completed.length > 0 ? `
-        <div class="task-completed-heading">Completed · ${completed.length}</div>
-        ${completed.map(buildTaskItemHTML).join('')}` : ''}
+        <div class="task-completed-heading">Done · ${completed.length}</div>
+        ${completed.map(t => buildTaskItemHTML(t, listType)).join('')}` : ''}
     </div>`;
 }
 
@@ -577,29 +609,38 @@ export function renderTasksView() {
   tasksEl.hidden = false;
   restoreHeaderSearch();
 
+  const list = store.taskLists.find(l => l.id === store.currentTaskList);
+  const listType = list?.type || 'basic';
+  const listName = list?.name || 'Tasks';
   const pending   = store.tasks.filter(t => !t.completed);
   const completed = store.tasks.filter(t => t.completed);
   const total     = store.tasks.length;
   const doneCount = completed.length;
 
+  const qtyInputHTML = listType === 'quantity'
+    ? `<input class="task-input task-qty-add" id="task-qty-input" type="number" min="1" max="9999" value="1" title="Quantity" />`
+    : '';
+  const placeholder = listType === 'quantity' ? 'Add an item…' : 'Add a task…';
+
   tasksEl.innerHTML = `
     <div class="feature-view-layout">
       <div class="feature-view-header">
-        <div class="feature-view-title">Tasks</div>
-        ${total > 0 ? `<div class="feature-view-subtitle">${doneCount} of ${total} completed</div>` : ''}
+        <div class="feature-view-title">${escapeHtml(listName)}</div>
+        ${total > 0 ? `<div class="feature-view-subtitle">${doneCount} of ${total} done</div>` : ''}
       </div>
       <div class="task-add-row tasks-view-add-row">
-        <input class="task-input" id="task-input" placeholder="Add a task…" maxlength="200" autocomplete="off" />
-        <button class="task-add-btn" data-action="add-task" title="Add task"><i data-lucide="plus"></i></button>
+        <input class="task-input" id="task-input" placeholder="${placeholder}" maxlength="200" autocomplete="off" />
+        ${qtyInputHTML}
+        <button class="task-add-btn" data-action="add-task" title="Add"><i data-lucide="plus"></i></button>
       </div>
       <div class="task-list tasks-view-list">
-        ${pending.map(buildTaskItemHTML).join('')}
+        ${pending.map(t => buildTaskItemHTML(t, listType)).join('')}
         ${pending.length === 0 && completed.length === 0
-          ? '<div class="task-empty">No tasks yet — add one above</div>'
+          ? '<div class="task-empty">No items yet — add one above</div>'
           : ''}
         ${completed.length > 0 ? `
-          <div class="task-completed-heading">Completed · ${completed.length}</div>
-          ${completed.map(buildTaskItemHTML).join('')}
+          <div class="task-completed-heading">Done · ${completed.length}</div>
+          ${completed.map(t => buildTaskItemHTML(t, listType)).join('')}
         ` : ''}
       </div>
     </div>`;

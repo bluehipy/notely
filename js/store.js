@@ -7,6 +7,7 @@ export const store = {
   notebooks: [],
   notes: [],
   tags: [],
+  taskLists: [],
   tasks: [],
   events: [],
 
@@ -19,6 +20,7 @@ export const store = {
   currentNotebook: null,  // ID of selected notebook, or null for "All Notes"
   currentNote: null,      // ID of selected note
   currentTag: null,       // ID of selected tag
+  currentTaskList: null,  // ID of selected task list
 
   // Search state
   searchQuery: '',

@@ -27,11 +27,12 @@ function setRoute(hash) {
 function parseRoute() {
   const hash = location.hash.slice(1);
   if (!hash || hash === 'all') return { view: 'all' };
+  if (hash === 'tasks') return { view: 'tasks-redirect' };
   if (hash === 'dashboard') return { view: 'dashboard' };
-  if (hash === 'tasks')     return { view: 'tasks' };
   if (hash === 'calendar')  return { view: 'calendar' };
   if (hash === 'settings')  return { view: 'settings' };
   const [section, id] = hash.split('/');
+  if (section === 'tasklist' && id) return { view: 'tasklist', id: parseInt(id) };
   if (section === 'notebook' && id) return { view: 'notebook', id: parseInt(id) };
   if (section === 'tag'      && id) return { view: 'tag',      id: parseInt(id) };
   if (section === 'note'     && id) return { view: 'note',     id: parseInt(id) };
@@ -43,6 +44,7 @@ async function applyRoute() {
 
   if (route.view === 'dashboard') {
     store.currentView = 'dashboard';
+    store.currentTaskList = null;
     store.currentNotebook = null;
     store.currentTag = null;
     store.currentNote = null;
@@ -51,14 +53,26 @@ async function applyRoute() {
        FROM notes n LEFT JOIN notebooks nb ON n.notebook_id = nb.id
        ORDER BY n.created_at DESC LIMIT 50`
     );
+    store.tasks = await db.all('SELECT * FROM tasks ORDER BY completed ASC, priority DESC, created_at ASC');
     renderSidebar();
     renderDashboard();
 
-  } else if (route.view === 'tasks') {
+  } else if (route.view === 'tasks-redirect') {
+    // Old #tasks link — redirect to first task list
+    const first = store.taskLists[0];
+    if (first) { setRoute('tasklist/' + first.id); return; }
+    renderSidebar();
+
+  } else if (route.view === 'tasklist') {
     store.currentView = 'tasks';
+    store.currentTaskList = route.id;
     store.currentNotebook = null;
     store.currentTag = null;
     store.currentNote = null;
+    store.tasks = await db.all(
+      'SELECT * FROM tasks WHERE list_id = ? ORDER BY completed ASC, priority DESC, created_at ASC',
+      [route.id]
+    );
     renderSidebar();
     renderTasksView();
 
@@ -150,8 +164,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     store.notes = await db.all('SELECT * FROM notes ORDER BY updated_at DESC');
     console.log('Notes loaded:', store.notes.length);
 
-    // Fetch tasks
-    store.tasks = await db.all('SELECT * FROM tasks ORDER BY completed ASC, priority DESC, created_at ASC');
+    // Fetch task lists
+    store.taskLists = await db.all('SELECT * FROM task_lists ORDER BY created_at ASC');
+
+    // Fetch tasks (loaded per-list on route; start empty)
+    store.tasks = [];
 
     // Fetch events
     store.events = await db.all('SELECT * FROM events ORDER BY date ASC, time ASC, id ASC');
@@ -210,6 +227,7 @@ function setupEventListeners() {
   // Tasks view event delegation (same handlers — rerenderActiveView picks the right renderer)
   document.getElementById('tasks-view')?.addEventListener('click', handleDashboardClick);
   document.getElementById('tasks-view')?.addEventListener('keydown', handleDashboardKeydown);
+  document.getElementById('tasks-view')?.addEventListener('change', handleTasksViewChange);
 
   // Calendar view event delegation
   document.getElementById('calendar-view')?.addEventListener('click', handleDashboardClick);
@@ -277,6 +295,7 @@ async function handleSidebarClick(event) {
   if (action === 'select-dashboard') {
     setRoute('dashboard');
     store.currentView = 'dashboard';
+    store.currentTaskList = null;
     store.currentNotebook = null;
     store.currentTag = null;
     store.currentNote = null;
@@ -288,18 +307,48 @@ async function handleSidebarClick(event) {
        ORDER BY n.created_at DESC
        LIMIT 50`
     );
+    store.tasks = await db.all('SELECT * FROM tasks ORDER BY completed ASC, priority DESC, created_at ASC');
 
     renderSidebar();
     renderDashboard();
 
-  } else if (action === 'select-tasks') {
-    setRoute('tasks');
+  } else if (action === 'select-tasklist') {
+    const listId = parseInt(target.dataset.id);
+    setRoute('tasklist/' + listId);
     store.currentView = 'tasks';
+    store.currentTaskList = listId;
     store.currentNotebook = null;
     store.currentTag = null;
     store.currentNote = null;
+    store.tasks = await db.all(
+      'SELECT * FROM tasks WHERE list_id = ? ORDER BY completed ASC, priority DESC, created_at ASC',
+      [listId]
+    );
     renderSidebar();
     renderTasksView();
+
+  } else if (action === 'new-task-list') {
+    await showNewTaskListDialog();
+
+  } else if (action === 'delete-task-list') {
+    event.stopPropagation();
+    const listId = parseInt(target.dataset.id);
+    const list = store.taskLists.find(l => l.id === listId);
+    if (!list) return;
+    const confirmed = await showConfirmDialog(`Delete "${list.name}"? All tasks in it will be removed.`);
+    if (!confirmed) return;
+    await db.run('DELETE FROM task_lists WHERE id = ?', [listId]);
+    store.taskLists = store.taskLists.filter(l => l.id !== listId);
+    if (store.currentTaskList === listId) {
+      store.currentTaskList = null;
+      store.tasks = [];
+      store.currentView = 'notes';
+      showNotePanels();
+      store.notes = await db.all('SELECT * FROM notes ORDER BY updated_at DESC');
+      renderSidebar(); renderNoteList(); await renderEditor(null);
+    } else {
+      renderSidebar();
+    }
 
   } else if (action === 'select-calendar') {
     setRoute('calendar');
@@ -479,9 +528,24 @@ async function handleDashboardClick(event) {
     const input = document.getElementById('task-input');
     const text = input?.value.trim();
     if (text) {
-      await addTask(text);
+      const list = store.taskLists.find(l => l.id === store.currentTaskList);
+      const qty = list?.type === 'quantity'
+        ? (parseInt(document.getElementById('task-qty-input')?.value) || 1)
+        : 1;
+      await addTask(text, qty);
       if (input) input.value = '';
+      const qtyInput = document.getElementById('task-qty-input');
+      if (qtyInput) qtyInput.value = '1';
     }
+
+  } else if (action === 'set-task-quantity') {
+    event.stopPropagation();
+    const taskId = parseInt(target.dataset.id);
+    const val = parseInt(target.value);
+    if (isNaN(val) || val < 1) return;
+    await db.run('UPDATE tasks SET quantity = ? WHERE id = ?', [val, taskId]);
+    const task = store.tasks.find(t => t.id === taskId);
+    if (task) task.quantity = val;
 
   } else if (action === 'toggle-task') {
     const taskId = parseInt(target.dataset.id);
@@ -600,13 +664,36 @@ async function handleDashboardClick(event) {
 async function handleDashboardKeydown(event) {
   if (event.key !== 'Enter') return;
 
-  if (event.target.id === 'task-input') {
-    const text = event.target.value.trim();
-    if (text) { await addTask(text); event.target.value = ''; }
+  if (event.target.id === 'task-input' || event.target.id === 'task-qty-input') {
+    const input = document.getElementById('task-input');
+    const text = input?.value.trim();
+    if (text) {
+      const list = store.taskLists.find(l => l.id === store.currentTaskList);
+      const qty = list?.type === 'quantity'
+        ? (parseInt(document.getElementById('task-qty-input')?.value) || 1)
+        : 1;
+      await addTask(text, qty);
+      if (input) input.value = '';
+      const qtyInput = document.getElementById('task-qty-input');
+      if (qtyInput) qtyInput.value = '1';
+    }
 
   } else if (event.target.id === 'cal-event-input') {
     const text = event.target.value.trim();
     if (text) { await addCalEvent(text); event.target.value = ''; }
+  }
+}
+
+async function handleTasksViewChange(event) {
+  const target = event.target.closest('[data-action]');
+  if (!target) return;
+  if (target.dataset.action === 'set-task-quantity') {
+    const taskId = parseInt(target.dataset.id);
+    const val = Math.max(1, parseInt(target.value) || 1);
+    target.value = val;
+    await db.run('UPDATE tasks SET quantity = ? WHERE id = ?', [val, taskId]);
+    const task = store.tasks.find(t => t.id === taskId);
+    if (task) task.quantity = val;
   }
 }
 
@@ -695,13 +782,71 @@ async function addCalEvent(title) {
   setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
 }
 
-// Add a new task
-async function addTask(text) {
-  const result = await db.run('INSERT INTO tasks (text) VALUES (?)', [text]);
+// Add a new task to the current list
+async function addTask(text, quantity = 1) {
+  const listId = store.currentTaskList;
+  if (!listId) return;
+  const result = await db.run(
+    'INSERT INTO tasks (list_id, text, quantity) VALUES (?, ?, ?)',
+    [listId, text, quantity]
+  );
   const newTask = await db.get('SELECT * FROM tasks WHERE id = ?', [result.lastInsertId]);
   store.tasks.unshift(newTask);
   sortTasks();
   rerenderActiveView();
+}
+
+async function showNewTaskListDialog() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    overlay.innerHTML = `
+      <div class="dialog-box" style="min-width:320px">
+        <div class="dialog-title">New Task List</div>
+        <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px">
+          <input id="tl-name" class="dialog-input" type="text" placeholder="List name…" maxlength="60" autocomplete="off" />
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label style="font-size:12px;color:var(--color-text-muted);font-weight:600;letter-spacing:.05em">TYPE</label>
+            <label class="tl-type-row"><input type="radio" name="tl-type" value="priority" checked /> <span><strong>Priority</strong> — tasks with priority bells</span></label>
+            <label class="tl-type-row"><input type="radio" name="tl-type" value="quantity" /> <span><strong>Quantity</strong> — each item has a count (shopping list)</span></label>
+            <label class="tl-type-row"><input type="radio" name="tl-type" value="basic" /> <span><strong>Basic</strong> — simple checklist</span></label>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button class="btn btn-ghost" id="tl-cancel">Cancel</button>
+          <button class="btn btn-primary" id="tl-create">Create</button>
+        </div>
+      </div>`;
+    document.getElementById('dialog-container').appendChild(overlay);
+    const nameInput = overlay.querySelector('#tl-name');
+    nameInput.focus();
+
+    const close = () => { overlay.remove(); resolve(null); };
+    overlay.querySelector('#tl-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('#tl-create').addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
+      const type = overlay.querySelector('input[name="tl-type"]:checked')?.value || 'basic';
+      overlay.remove();
+      const result = await db.run('INSERT INTO task_lists (name, type) VALUES (?, ?)', [name, type]);
+      const newList = await db.get('SELECT * FROM task_lists WHERE id = ?', [result.lastInsertId]);
+      store.taskLists.push(newList);
+      store.currentTaskList = newList.id;
+      store.currentView = 'tasks';
+      store.tasks = [];
+      setRoute('tasklist/' + newList.id);
+      renderSidebar();
+      renderTasksView();
+      resolve(newList);
+    });
+
+    nameInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') overlay.querySelector('#tl-create').click();
+      if (e.key === 'Escape') close();
+    });
+  });
 }
 
 // Create new note

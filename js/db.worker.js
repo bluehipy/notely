@@ -120,18 +120,44 @@ function createSchema(db) {
     )
   `);
 
+  // Task lists table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_lists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'basic',
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Seed a default "My Tasks" priority list if none exist
+  const listCount = db.selectValue('SELECT COUNT(*) FROM task_lists');
+  if (listCount === 0) {
+    db.exec(`INSERT INTO task_lists (name, type) VALUES ('My Tasks', 'priority')`);
+  }
+
   // Tasks table
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      list_id INTEGER REFERENCES task_lists(id) ON DELETE CASCADE,
       text TEXT NOT NULL,
       completed INTEGER NOT NULL DEFAULT 0,
       priority INTEGER NOT NULL DEFAULT 0,
+      quantity INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
     )
   `);
 
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at ASC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id)`);
+
+  // Migrations for existing installs
+  try { db.exec(`ALTER TABLE tasks ADD COLUMN list_id INTEGER REFERENCES task_lists(id) ON DELETE CASCADE`); } catch {}
+  try { db.exec(`ALTER TABLE tasks ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1`); } catch {}
+
+  // Assign orphan tasks (list_id IS NULL) to the first list
+  db.exec(`UPDATE tasks SET list_id = (SELECT id FROM task_lists ORDER BY id LIMIT 1) WHERE list_id IS NULL`);
 
   // Events table
   db.exec(`
