@@ -29,7 +29,11 @@ export const store = {
   renamingNotebookId: null,
   renamingTaskListId: null,
 
-  // Active view: 'notes' | 'dashboard' | 'tasks' | 'calendar' | 'settings'
+  // AI Advisor chat state (session-only, resets on reload)
+  advisorMessages: [],
+  advisorLoading: false,
+
+  // Active view: 'notes' | 'dashboard' | 'tasks' | 'calendar' | 'advisor' | 'settings'
   currentView: 'notes',
 
   // User settings (persisted to localStorage)

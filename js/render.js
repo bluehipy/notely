@@ -72,6 +72,10 @@ export function renderSidebar() {
           <i data-lucide="calendar"></i>
           <span class="sidebar-item-text">Calendar</span>
         </div>
+        <div class="sidebar-item ${store.currentView === 'advisor' ? 'selected' : ''}" data-action="select-advisor">
+          <i data-lucide="bot"></i>
+          <span class="sidebar-item-text">${escapeHtml(store.settings?.advisor?.name || 'AI Advisor')}</span>
+        </div>
       </div>
     </div>
 
@@ -295,6 +299,7 @@ function getWidgetLabel(id) {
     const list = store.taskLists.find(l => l.id === parseInt(id.slice(9)));
     return list?.name || 'Task List';
   }
+  if (id === 'advisor') return store.settings?.advisor?.name || 'AI Advisor';
   return WIDGET_LABELS[id] || id;
 }
 
@@ -305,6 +310,7 @@ function getWidgetIcon(id) {
     const list = store.taskLists.find(l => l.id === parseInt(id.slice(9)));
     return list?.type === 'priority' ? 'bell' : list?.type === 'quantity' ? 'shopping-cart' : 'check-square';
   }
+  if (id === 'advisor') return 'bot';
   return WIDGET_ICONS[id] || 'layout-dashboard';
 }
 
@@ -410,6 +416,27 @@ function buildTaskListWidgetContent(listId, ds) {
     </div>`;
 }
 
+function buildAdvisorWidgetContent() {
+  const msgs = store.advisorMessages.slice(-6); // last 6 messages
+  const msgHTML = msgs.length
+    ? msgs.map(m => `
+        <div class="adv-msg adv-msg-${m.role}${m.working ? ' adv-msg-working' : ''}">
+          <span class="adv-msg-text">${m.working ? escapeHtml(m.text) : renderMarkdown(m.text)}</span>
+        </div>`).join('')
+    : `<div class="adv-widget-empty">Ask me anything — I can manage your tasks, notes, and calendar.</div>`;
+  const isLoading = store.advisorLoading;
+  return `
+    <div class="adv-widget" id="adv-widget">
+      <div class="adv-widget-msgs" id="adv-widget-msgs">${msgHTML}${isLoading ? '<div class="adv-msg adv-msg-loading"><span class="adv-dots"><span>.</span><span>.</span><span>.</span></span></div>' : ''}</div>
+      <div class="adv-widget-input-row">
+        <input class="adv-widget-input" id="adv-widget-input" placeholder="Ask…" autocomplete="off" ${isLoading ? 'disabled' : ''} />
+        <button class="adv-widget-send" data-action="advisor-widget-send" ${isLoading ? 'disabled' : ''} title="Send">
+          <i data-lucide="send" width="13" height="13"></i>
+        </button>
+      </div>
+    </div>`;
+}
+
 function buildWidgetContent(id, ds) {
   if (id.startsWith('notebook-'))  return buildNotebookWidgetContent(parseInt(id.slice(9)));
   if (id.startsWith('note-'))      return buildNoteWidgetContent(parseInt(id.slice(5)));
@@ -420,6 +447,7 @@ function buildWidgetContent(id, ds) {
     case 'calendar':    return buildCalendarContent(ds);
     case 'events':      return buildEventsContent(ds);
     case 'scratchpad':  return `<textarea class="dash-scratchpad" id="scratchpad" placeholder="Quick notes…"></textarea>`;
+    case 'advisor':     return buildAdvisorWidgetContent();
     default: return '';
   }
 }
@@ -432,7 +460,7 @@ export function renderDashboard() {
   document.getElementById('note-list').hidden = true;
   document.getElementById('editor').hidden    = true;
   dashboardEl.hidden = false;
-  ['tasks-view','calendar-view','settings-view'].forEach(id =>
+  ['tasks-view','calendar-view','settings-view','advisor-view'].forEach(id =>
     document.getElementById(id)?.setAttribute('hidden',''));
 
   const ds = store.settings.dashboard;
@@ -456,7 +484,7 @@ export function renderDashboard() {
   const items = layout.filter(item => ds.widgets[item.id] !== false);
 
   const itemsHTML = items.map(item => {
-    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-') || item.id.startsWith('tasklist-');
+    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-') || item.id.startsWith('tasklist-') || item.id === 'advisor';
     const closeBtn = isCustom
       ? `<button class="dash-widget-close" data-action="remove-widget" data-widget-id="${item.id}" title="Remove widget"><i data-lucide="x" width="12" height="12"></i></button>`
       : '';
@@ -502,10 +530,16 @@ export function renderDashboard() {
     </div>`).join('');
   const ctx = document.getElementById('header-contextual');
   if (ctx) {
+    const advisorName = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
+    const advisorInLayout = store.settings.dashboard.layout.some(l => l.id === 'advisor');
     ctx.innerHTML = `
       <div class="dash-add-menu-wrap">
         <button class="dash-header-add-btn" data-action="toggle-add-widget-menu">+ Add widget</button>
         <div class="dash-add-widget-menu" id="add-widget-menu" hidden>
+          <div class="dash-add-menu-section">AI</div>
+          <div class="dash-add-menu-item${advisorInLayout ? ' dash-add-menu-item-disabled' : ''}" data-action="add-advisor-widget">
+            <i data-lucide="bot" width="12" height="12"></i> ${advisorName}
+          </div>
           ${store.taskLists.length ? `<div class="dash-add-menu-section">Task Lists</div>${tlItems}` : ''}
           ${store.notebooks.length ? `<div class="dash-add-menu-section">Notebooks</div>${nbItems}` : ''}
           <div class="dash-add-menu-section">Notes</div>
@@ -943,9 +977,151 @@ export function renderSettingsView() {
           </div>
         </div>
       </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">AI Advisor</div>
+        <div class="settings-row">
+          <div class="settings-row-label">Name</div>
+          <div class="settings-row-control">
+            <input type="text" class="settings-text-input" id="advisor-name-input"
+              value="${escapeHtml(s.advisor?.name || 'AI Advisor')}" placeholder="AI Advisor" maxlength="40" />
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">API Key</div>
+          <div class="settings-row-control">
+            <input type="password" class="settings-text-input" id="advisor-key-input"
+              value="${escapeHtml(s.advisor?.apiKey || '')}" placeholder="sk-ant-… or sk-…" autocomplete="off" />
+            <span class="settings-row-hint">Anthropic (sk-ant-) or OpenAI (sk-) key — stored locally only</span>
+          </div>
+        </div>
+        <div class="settings-row settings-row-tall">
+          <div class="settings-row-label">Your context</div>
+          <div class="settings-row-control">
+            <textarea class="settings-textarea" id="advisor-prompt-input"
+              placeholder="Tell the advisor about yourself: your goals, preferences, what you use Notely for…" rows="5">${escapeHtml(s.advisor?.systemPrompt || '')}</textarea>
+          </div>
+        </div>
+      </div>
     </div>`;
 
   if (window.lucide) window.lucide.createIcons();
+
+  // Wire advisor settings inputs (save on blur/change)
+  function saveAdvisorField(field, value) {
+    if (!s.advisor) s.advisor = {};
+    s.advisor[field] = value;
+    try { localStorage.setItem('notely-settings', JSON.stringify(s)); } catch {}
+    // Update sidebar label live
+    document.querySelectorAll('[data-action="select-advisor"] .sidebar-item-text')
+      .forEach(el => { el.textContent = s.advisor.name || 'AI Advisor'; });
+  }
+  document.getElementById('advisor-name-input')
+    ?.addEventListener('change', e => saveAdvisorField('name', e.target.value.trim() || 'AI Advisor'));
+  document.getElementById('advisor-key-input')
+    ?.addEventListener('change', e => saveAdvisorField('apiKey', e.target.value.trim()));
+  document.getElementById('advisor-prompt-input')
+    ?.addEventListener('change', e => saveAdvisorField('systemPrompt', e.target.value));
+}
+
+// Simple markdown → HTML renderer (safe, no external deps)
+function renderMarkdown(text) {
+  if (!text) return '';
+  // Escape HTML first
+  let html = text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Bold and italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Code spans
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bullet lists: convert consecutive "- " lines into <ul>
+  html = html.replace(/((?:^|\n)- .+)+/g, match => {
+    const items = match.trim().split('\n').map(l => `<li>${l.replace(/^- /, '')}</li>`).join('');
+    return `<ul>${items}</ul>`;
+  });
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+// Render AI Advisor full view
+export function renderAdvisorView() {
+  const el = document.getElementById('advisor-view');
+  if (!el) return;
+
+  ['note-list','editor','dashboard','tasks-view','calendar-view','settings-view'].forEach(id =>
+    document.getElementById(id)?.setAttribute('hidden', ''));
+  el.hidden = false;
+  restoreHeaderSearch();
+
+  const name = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
+  const hasKey = !!(store.settings?.advisor?.apiKey);
+
+  const messagesHTML = store.advisorMessages.length
+    ? store.advisorMessages.map(m => `
+        <div class="adv-msg adv-msg-${m.role}${m.working ? ' adv-msg-working' : ''}">
+          ${m.role === 'assistant' && !m.working
+            ? `<div class="adv-msg-avatar"><i data-lucide="bot" width="14" height="14"></i></div>`
+            : ''}
+          <div class="adv-msg-bubble">${m.working ? escapeHtml(m.text) : renderMarkdown(m.text)}</div>
+        </div>`).join('')
+    : `<div class="adv-empty">
+        <i data-lucide="bot" style="width:32px;height:32px;color:var(--color-primary);margin-bottom:12px"></i>
+        <div class="adv-empty-title">${name}</div>
+        <div class="adv-empty-sub">${hasKey ? 'Ask me anything — I can create tasks, add events, and search your notes.' : 'Add your API key in Settings to get started.'}</div>
+      </div>`;
+
+  el.innerHTML = `
+    <div class="feature-view-layout advisor-layout">
+      <div class="feature-view-header">
+        <div class="feature-view-title">${name}</div>
+        ${store.advisorMessages.length > 0
+          ? `<button class="adv-clear-btn" data-action="advisor-clear" title="New conversation">
+               <i data-lucide="rotate-ccw" width="14" height="14"></i> New conversation
+             </button>` : ''}
+      </div>
+      <div class="adv-chat">
+        <div class="adv-messages" id="adv-messages">
+          ${messagesHTML}
+          ${store.advisorLoading ? '<div class="adv-msg adv-msg-assistant"><div class="adv-msg-avatar"><i data-lucide="bot" width="14" height="14"></i></div><div class="adv-msg-bubble adv-msg-thinking"><span class="adv-dots"><span>.</span><span>.</span><span>.</span></span></div></div>' : ''}
+        </div>
+        <div class="adv-input-row">
+          <textarea class="adv-input" id="adv-input" rows="1"
+            placeholder="${hasKey ? 'Ask anything…' : 'Configure API key in Settings first'}"
+            ${hasKey ? '' : 'disabled'}
+            autocomplete="off"></textarea>
+          <button class="adv-send-btn" data-action="advisor-send"
+            ${hasKey && !store.advisorLoading ? '' : 'disabled'}
+            title="Send (Enter)">
+            <i data-lucide="send" width="16" height="16"></i>
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  if (window.lucide) window.lucide.createIcons();
+
+  // Auto-scroll messages to bottom
+  const msgsEl = document.getElementById('adv-messages');
+  if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
+
+  // Auto-resize textarea on input
+  const input = document.getElementById('adv-input');
+  if (input) {
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    });
+    // Enter to send, Shift+Enter for newline
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        document.querySelector('[data-action="advisor-send"]')?.click();
+      }
+    });
+    if (!store.advisorLoading) input.focus();
+  }
 }
 
 // Render Note List

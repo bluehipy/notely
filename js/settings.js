@@ -1,6 +1,11 @@
 // Settings persistence - Notely
 
 const DEFAULTS = {
+  advisor: {
+    name: 'AI Advisor',
+    apiKey: '',
+    systemPrompt: ''
+  },
   dashboard: {
     widgets: { recentNotes: true, calendar: true, events: true, scratchpad: true },
     recentNotesCount: 8,
@@ -55,4 +60,13 @@ export function loadSettings() {
 
 export function saveSettings(s) {
   try { localStorage.setItem('notely-settings', JSON.stringify(s)); } catch {}
+}
+
+export function saveAdvisorSettings(advisor) {
+  try {
+    const raw = localStorage.getItem('notely-settings');
+    const s = raw ? JSON.parse(raw) : {};
+    s.advisor = advisor;
+    localStorage.setItem('notely-settings', JSON.stringify(s));
+  } catch {}
 }

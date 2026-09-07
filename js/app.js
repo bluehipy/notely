@@ -2,7 +2,8 @@
 
 import { db, waitForReady } from './db.js';
 import { store } from './store.js';
-import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderSettingsView, showNotePanels, showConfirmDialog, showToast } from './render.js';
+import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderAdvisorView, renderSettingsView, showNotePanels, showConfirmDialog, showToast } from './render.js';
+import { runAdvisor, clearAdvisorHistory } from './advisor.js';
 import { saveSettings } from './settings.js';
 import { initTheme, toggleTheme } from './theme.js';
 import { initEditor, refreshAttachmentTray } from './editor.js';
@@ -30,6 +31,7 @@ function parseRoute() {
   if (hash === 'tasks') return { view: 'tasks-redirect' };
   if (hash === 'dashboard') return { view: 'dashboard' };
   if (hash === 'calendar')  return { view: 'calendar' };
+  if (hash === 'advisor')   return { view: 'advisor' };
   if (hash === 'settings')  return { view: 'settings' };
   const [section, id] = hash.split('/');
   if (section === 'tasklist' && id) return { view: 'tasklist', id: parseInt(id) };
@@ -83,6 +85,14 @@ async function applyRoute() {
     store.currentNote = null;
     renderSidebar();
     renderCalendarView();
+
+  } else if (route.view === 'advisor') {
+    store.currentView = 'advisor';
+    store.currentNotebook = null;
+    store.currentTag = null;
+    store.currentNote = null;
+    renderSidebar();
+    renderAdvisorView();
 
   } else if (route.view === 'settings') {
     store.currentView = 'settings';
@@ -377,6 +387,46 @@ async function handleSidebarClick(event) {
     }
     renderSidebar();
     renderCalendarView();
+
+  } else if (action === 'select-advisor') {
+    setRoute('advisor');
+    store.currentView = 'advisor';
+    store.currentNotebook = null;
+    store.currentTag = null;
+    store.currentNote = null;
+    renderSidebar();
+    renderAdvisorView();
+
+  } else if (action === 'advisor-send' || action === 'advisor-widget-send') {
+    const isWidget = action === 'advisor-widget-send';
+    const inputEl = document.getElementById(isWidget ? 'adv-widget-input' : 'adv-input');
+    const text = inputEl?.value.trim();
+    if (!text || store.advisorLoading) return;
+    if (inputEl) { inputEl.value = ''; inputEl.style.height = 'auto'; }
+    store.advisorLoading = true;
+    const rerender = () => { if (store.currentView === 'advisor') renderAdvisorView(); else renderDashboard(); };
+    rerender();
+    try {
+      await runAdvisor(text, rerender);
+    } catch (err) {
+      store.advisorMessages.push({ role: 'assistant', text: `Error: ${err.message}` });
+    } finally {
+      store.advisorLoading = false;
+      rerender();
+    }
+
+  } else if (action === 'advisor-clear') {
+    clearAdvisorHistory();
+    renderAdvisorView();
+
+  } else if (action === 'add-advisor-widget') {
+    const already = store.settings.dashboard.layout.some(l => l.id === 'advisor');
+    if (!already) {
+      store.settings.dashboard.layout.push({ id: 'advisor', x: 0, y: 9999, w: 4, h: 6 });
+      saveSettings(store.settings);
+    }
+    document.getElementById('add-widget-menu')?.setAttribute('hidden', '');
+    renderDashboard();
 
   } else if (action === 'select-settings') {
     setRoute('settings');
@@ -807,6 +857,7 @@ function rerenderActiveView() {
   if (store.currentView === 'dashboard') renderDashboard();
   else if (store.currentView === 'tasks') renderTasksView();
   else if (store.currentView === 'calendar') renderCalendarView();
+  else if (store.currentView === 'advisor') renderAdvisorView();
   else if (store.currentView === 'settings') renderSettingsView();
 }
 
