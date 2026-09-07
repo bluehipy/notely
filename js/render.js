@@ -1,6 +1,9 @@
 // DOM rendering functions - Notely
 
 import { store } from './store.js';
+import { saveSettings } from './settings.js';
+
+let _grid = null; // active GridStack instance
 
 // Helper: Format relative timestamp
 function formatTimestamp(dateString) {
@@ -76,14 +79,6 @@ export function renderSidebar() {
       </div>
     </div>
 
-    <!-- Settings (footer) -->
-    <div class="sidebar-footer">
-      <div class="sidebar-item ${store.currentView === 'settings' ? 'selected' : ''}" data-action="select-settings">
-        <i data-lucide="settings"></i>
-        <span class="sidebar-item-text">Settings</span>
-      </div>
-    </div>
-
     <!-- Notebooks Section -->
     <div class="sidebar-section">
       <div class="sidebar-section-header">NOTEBOOKS</div>
@@ -143,6 +138,14 @@ export function renderSidebar() {
         </div>
       </div>
     ` : ''}
+
+    <!-- Settings (footer) -->
+    <div class="sidebar-footer">
+      <div class="sidebar-item ${store.currentView === 'settings' ? 'selected' : ''}" data-action="select-settings">
+        <i data-lucide="settings"></i>
+        <span class="sidebar-item-text">Settings</span>
+      </div>
+    </div>
   `;
 
   sidebar.innerHTML = html;
@@ -207,8 +210,26 @@ function buildTaskItemHTML(task) {
 
 // ── Dashboard widget content builders ────────────────────────────
 
-const WIDGET_LABELS = { tasks: 'Tasks', calendar: 'Calendar', recentNotes: 'Recent Notes', scratchpad: 'Scratch Pad' };
-const WIDGET_ICONS  = { tasks: 'check-square', calendar: 'calendar', recentNotes: 'file-text', scratchpad: 'edit-3' };
+const WIDGET_LABELS = { tasks: 'Tasks', calendar: 'Calendar', events: 'Events', recentNotes: 'Recent Notes', scratchpad: 'Scratch Pad' };
+const WIDGET_ICONS  = { tasks: 'check-square', calendar: 'calendar', events: 'calendar-clock', recentNotes: 'file-text', scratchpad: 'edit-3' };
+
+function getWidgetLabel(id) {
+  if (id.startsWith('notebook-')) {
+    const nb = store.notebooks.find(n => n.id === parseInt(id.slice(9)));
+    return nb?.name || 'Notebook';
+  }
+  if (id.startsWith('note-')) {
+    const note = store.notes.find(n => n.id === parseInt(id.slice(5)));
+    return note?.title || 'Note';
+  }
+  return WIDGET_LABELS[id] || id;
+}
+
+function getWidgetIcon(id) {
+  if (id.startsWith('notebook-')) return 'book';
+  if (id.startsWith('note-'))     return 'file-text';
+  return WIDGET_ICONS[id] || 'layout-dashboard';
+}
 
 function buildTasksContent(ds) {
   const pending   = store.tasks.filter(t => !t.completed);
@@ -243,16 +264,48 @@ function buildRecentNotesContent(ds) {
 }
 
 function buildCalendarContent(ds) {
+  return `<div class="dash-cal-section">${buildCalendarHTML()}</div>`;
+}
+
+function buildEventsContent(ds) {
+  return buildThreeDayHTML(ds.calendarDaysAhead);
+}
+
+function buildNotebookWidgetContent(notebookId) {
+  const notes = store.notes
+    .filter(n => n.notebook_id === notebookId)
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  if (!notes.length) return '<div class="dashboard-empty">No notes in this notebook</div>';
+  return `<div class="dash-nb-list">
+    ${notes.map(n => `
+      <div class="dash-nb-item" data-action="dashboard-select-note" data-id="${n.id}">
+        <div class="dash-nb-item-title">${escapeHtml(n.title || 'Untitled')}</div>
+        <div class="dash-nb-item-meta">${formatTimestamp(n.created_at)}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function buildNoteWidgetContent(noteId) {
+  const note = store.notes.find(n => n.id === noteId);
+  if (!note) return '<div class="dashboard-empty">Note not found</div>';
+  const preview = note.body || '';
   return `
-    <div class="dash-cal-section">${buildCalendarHTML()}</div>
-    <div class="dash-cal-section" style="margin-top:8px">${buildThreeDayHTML(ds.calendarDaysAhead)}</div>`;
+    <div class="dash-note-widget-body">
+      <div class="dash-note-widget-preview">${escapeHtml(preview)}</div>
+      <button class="dash-note-widget-open" data-action="dashboard-select-note" data-id="${note.id}">
+        Open note
+      </button>
+    </div>`;
 }
 
 function buildWidgetContent(id, ds) {
+  if (id.startsWith('notebook-')) return buildNotebookWidgetContent(parseInt(id.slice(9)));
+  if (id.startsWith('note-'))     return buildNoteWidgetContent(parseInt(id.slice(5)));
   switch (id) {
     case 'tasks':       return buildTasksContent(ds);
     case 'recentNotes': return buildRecentNotesContent(ds);
     case 'calendar':    return buildCalendarContent(ds);
+    case 'events':      return buildEventsContent(ds);
     case 'scratchpad':  return `<textarea class="dash-scratchpad" id="scratchpad" placeholder="Quick notes…"></textarea>`;
     default: return '';
   }
@@ -270,57 +323,103 @@ export function renderDashboard() {
     document.getElementById(id)?.setAttribute('hidden',''));
 
   const ds = store.settings.dashboard;
-  const w  = ds.widgets;
-  const { cols, rows } = ds.grid;
-  const layout = ds.layout;
+  const layout = ds.layout; // [{id, x, y, w, h}]
 
-  const visibleIds = Object.keys(layout).filter(id => w[id]);
+  // Destroy previous grid instance so we can re-render cleanly
+  if (_grid) { try { _grid.destroy(false); } catch {} _grid = null; }
 
-  const widgetsHTML = visibleIds.map(id => {
-    const { col, row, colSpan, rowSpan } = layout[id];
-    const safeCS = Math.min(colSpan, cols - col + 1);
-    const safeRS = Math.min(rowSpan, rows - row + 1);
+  // Ensure every enabled widget has a layout entry (handles newly added widget types)
+  const knownIds = new Set(layout.map(l => l.id));
+  let layoutDirty = false;
+  Object.keys(ds.widgets).forEach(wid => {
+    if (ds.widgets[wid] !== false && !knownIds.has(wid)) {
+      layout.push({ id: wid, x: 0, y: 999, w: 4, h: 4 });
+      layoutDirty = true;
+    }
+  });
+  if (layoutDirty) saveSettings(store.settings);
+
+  // Only show enabled widgets
+  const items = layout.filter(item => ds.widgets[item.id] !== false);
+
+  const itemsHTML = items.map(item => {
+    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-');
+    const closeBtn = isCustom
+      ? `<button class="dash-widget-close" data-action="remove-widget" data-widget-id="${item.id}" title="Remove widget"><i data-lucide="x" width="12" height="12"></i></button>`
+      : '';
     return `
-      <div class="dash-widget" data-widget-id="${id}"
-           style="grid-column:${col}/span ${safeCS}; grid-row:${row}/span ${safeRS};">
-        <div class="dash-widget-header" draggable="true">
-          <i data-lucide="${WIDGET_ICONS[id]}" width="13" height="13"></i>
-          <span class="dash-widget-title">${WIDGET_LABELS[id]}</span>
+    <div class="grid-stack-item" gs-id="${item.id}"
+         gs-x="${item.x}" gs-y="${item.y}" gs-w="${item.w}" gs-h="${item.h}">
+      <div class="grid-stack-item-content dash-widget" data-widget-id="${item.id}">
+        <div class="dash-widget-header">
+          <i data-lucide="${getWidgetIcon(item.id)}" width="13" height="13"></i>
+          <span class="dash-widget-title">${escapeHtml(getWidgetLabel(item.id))}</span>
           <span class="dash-widget-grip"><i data-lucide="grip-horizontal" width="13" height="13"></i></span>
+          ${closeBtn}
         </div>
-        <div class="dash-widget-body">${buildWidgetContent(id, ds)}</div>
-        <div class="dash-rz-e"  data-action="rz-e"  data-wid="${id}"></div>
-        <div class="dash-rz-s"  data-action="rz-s"  data-wid="${id}"></div>
-        <div class="dash-rz-se" data-action="rz-se" data-wid="${id}"></div>
-      </div>`;
+        <div class="dash-widget-body">${buildWidgetContent(item.id, ds)}</div>
+      </div>
+    </div>`;
   }).join('');
 
-  const emptyHTML = !visibleIds.length
-    ? `<div style="grid-column:1/-1;display:flex;align-items:center;justify-content:center;
-                  color:var(--color-text-faint);font-size:var(--text-sm);padding:var(--space-xl)">
-        All widgets hidden — go to <strong style="margin:0 4px">Settings</strong> to enable some.</div>`
+  const emptyState = items.length === 0
+    ? `<div class="dash-empty-state" style="padding:32px;color:var(--color-text-faint);text-align:center;">All widgets hidden — go to <strong>Settings</strong> to enable some.</div>`
     : '';
 
   dashboardEl.innerHTML = `
-    <div class="dash-toolbar">
-      <span class="dash-toolbar-label">Columns</span>
-      <button class="dash-grid-btn" data-action="grid-col-dec">−</button>
-      <span class="dash-grid-num">${cols}</span>
-      <button class="dash-grid-btn" data-action="grid-col-inc">+</button>
-      <span class="dash-toolbar-sep"></span>
-      <span class="dash-toolbar-label">Rows</span>
-      <button class="dash-grid-btn" data-action="grid-row-dec">−</button>
-      <span class="dash-grid-num">${rows}</span>
-      <button class="dash-grid-btn" data-action="grid-row-inc">+</button>
-    </div>
-    <div class="dash-grid" id="dash-grid"
-         style="grid-template-columns:repeat(${cols},1fr); grid-template-rows:repeat(${rows},minmax(200px,auto));">
-      ${widgetsHTML}${emptyHTML}
+    <div class="dash-gs-wrap">
+      <div class="grid-stack">${itemsHTML}</div>
+      ${emptyState}
     </div>`;
+
+  // Inject add-widget button into header, hide search
+  const nbItems = store.notebooks.map(nb => `
+    <div class="dash-add-menu-item" data-action="add-notebook-widget" data-id="${nb.id}">
+      <i data-lucide="book" width="12" height="12"></i> ${escapeHtml(nb.name)}
+    </div>`).join('');
+  const noteItems = store.notes.slice(0, 30).map(n => `
+    <div class="dash-add-menu-item" data-action="add-note-widget" data-id="${n.id}">
+      <i data-lucide="file-text" width="12" height="12"></i> ${escapeHtml(n.title || 'Untitled')}
+    </div>`).join('');
+  const ctx = document.getElementById('header-contextual');
+  if (ctx) {
+    ctx.innerHTML = `
+      <div class="dash-add-menu-wrap">
+        <button class="dash-header-add-btn" data-action="toggle-add-widget-menu">+ Add widget</button>
+        <div class="dash-add-widget-menu" id="add-widget-menu" hidden>
+          ${store.notebooks.length ? `<div class="dash-add-menu-section">Notebooks</div>${nbItems}` : ''}
+          <div class="dash-add-menu-section">Notes</div>
+          ${noteItems || '<div class="dash-add-menu-item dash-add-menu-empty">No notes yet</div>'}
+        </div>
+      </div>`;
+    ctx.hidden = false;
+  }
+  const searchEl = document.querySelector('.search-input-wrapper');
+  if (searchEl) searchEl.hidden = true;
 
   if (window.lucide) window.lucide.createIcons();
 
-  // Restore scratchpad and wire auto-save
+  // Initialize gridstack
+  if (window.GridStack && items.length > 0) {
+    _grid = window.GridStack.init({
+      column: 12,
+      cellHeight: 70,
+      handle: '.dash-widget-header',
+      animate: true,
+      float: false,
+      margin: 6,
+    }, dashboardEl.querySelector('.grid-stack'));
+
+    _grid.on('change', () => {
+      const saved = _grid.save(false);
+      store.settings.dashboard.layout = saved.map(n => ({
+        id: n.id, x: n.x, y: n.y, w: n.w, h: n.h
+      }));
+      saveSettings(store.settings);
+    });
+  }
+
+  // Restore scratchpad
   const scratch = document.getElementById('scratchpad');
   if (scratch) {
     try { scratch.value = localStorage.getItem('notely-scratchpad') || ''; } catch {}
@@ -442,6 +541,13 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
 }
 
 // Restore the standard note-list + editor panels (called when leaving dashboard/tasks/calendar/settings)
+function restoreHeaderSearch() {
+  const ctx = document.getElementById('header-contextual');
+  if (ctx) { ctx.innerHTML = ''; ctx.hidden = true; }
+  const searchEl = document.querySelector('.search-input-wrapper');
+  if (searchEl) searchEl.hidden = false;
+}
+
 export function showNotePanels() {
   document.getElementById('dashboard')?.setAttribute('hidden', '');
   document.getElementById('tasks-view')?.setAttribute('hidden', '');
@@ -451,6 +557,7 @@ export function showNotePanels() {
   const editorEl   = document.getElementById('editor');
   if (noteListEl) noteListEl.hidden = false;
   if (editorEl)   editorEl.hidden   = false;
+  restoreHeaderSearch();
 }
 
 // Render Tasks full-page view
@@ -468,6 +575,7 @@ export function renderTasksView() {
   calendarEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
   tasksEl.hidden = false;
+  restoreHeaderSearch();
 
   const pending   = store.tasks.filter(t => !t.completed);
   const completed = store.tasks.filter(t => t.completed);
@@ -514,6 +622,7 @@ export function renderCalendarView() {
   tasksEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
   calendarEl.hidden = false;
+  restoreHeaderSearch();
 
   // Build upcoming events list (all events sorted, next 30 days)
   const pad = n => String(n).padStart(2, '0');
@@ -574,6 +683,7 @@ export function renderSettingsView() {
     document.getElementById(id)?.setAttribute('hidden', '')
   );
   el.hidden = false;
+  restoreHeaderSearch();
 
   const s = store.settings;
   const d = s.dashboard;
@@ -607,6 +717,7 @@ export function renderSettingsView() {
             ${checkbox('recentNotes', 'Recent Notes', w.recentNotes)}
             ${checkbox('tasks',       'Tasks',        w.tasks)}
             ${checkbox('calendar',    'Calendar',     w.calendar)}
+            ${checkbox('events',      'Events',       w.events)}
             ${checkbox('scratchpad',  'Scratch Pad',  w.scratchpad)}
           </div>
         </div>
@@ -620,13 +731,13 @@ export function renderSettingsView() {
           </div>
         </div>
 
-        <div class="settings-row${!w.calendar ? ' settings-row-disabled' : ''}">
-          <div class="settings-row-label">Events — days to display</div>
+        <div class="settings-row${!w.events ? ' settings-row-disabled' : ''}">
+          <div class="settings-row-label">Events widget — days to show</div>
           <div class="settings-row-control">
             <div class="settings-radio-group">
-              ${radio('calendarDaysAhead', '0', 'Selected day only',    d.calendarDaysAhead === 0, !w.calendar)}
-              ${radio('calendarDaysAhead', '1', 'Selected + 1 day',     d.calendarDaysAhead === 1, !w.calendar)}
-              ${radio('calendarDaysAhead', '2', 'Selected + 2 days',    d.calendarDaysAhead === 2, !w.calendar)}
+              ${radio('calendarDaysAhead', '0', 'Selected day only',    d.calendarDaysAhead === 0, !w.events)}
+              ${radio('calendarDaysAhead', '1', 'Selected + 1 day',     d.calendarDaysAhead === 1, !w.events)}
+              ${radio('calendarDaysAhead', '2', 'Selected + 2 days',    d.calendarDaysAhead === 2, !w.events)}
             </div>
           </div>
         </div>

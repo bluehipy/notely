@@ -2,18 +2,19 @@
 
 const DEFAULTS = {
   dashboard: {
-    widgets: { recentNotes: true, tasks: true, calendar: true, scratchpad: true },
+    widgets: { recentNotes: true, tasks: true, calendar: true, events: true, scratchpad: true },
     recentNotesCount: 8,
     calendarDaysAhead: 2,
     tasksMaxVisible: 10,
     tasksSortOrder: 'desc',
-    grid: { cols: 3, rows: 2 },
-    layout: {
-      tasks:       { col: 1, row: 1, colSpan: 1, rowSpan: 1 },
-      calendar:    { col: 2, row: 1, colSpan: 2, rowSpan: 1 },
-      recentNotes: { col: 1, row: 2, colSpan: 1, rowSpan: 1 },
-      scratchpad:  { col: 2, row: 2, colSpan: 2, rowSpan: 1 },
-    }
+    // Gridstack layout: array of {id, x, y, w, h} in 12-column units
+    layout: [
+      { id: 'tasks',       x: 0, y: 0, w: 3, h: 5 },
+      { id: 'calendar',    x: 3, y: 0, w: 4, h: 5 },
+      { id: 'events',      x: 7, y: 0, w: 5, h: 5 },
+      { id: 'recentNotes', x: 0, y: 5, w: 8, h: 5 },
+      { id: 'scratchpad',  x: 8, y: 5, w: 4, h: 5 },
+    ]
   }
 };
 
@@ -32,7 +33,14 @@ export function loadSettings() {
   try {
     const raw = localStorage.getItem('notely-settings');
     const base = JSON.parse(JSON.stringify(DEFAULTS));
-    return raw ? deepMerge(base, JSON.parse(raw)) : base;
+    if (!raw) return base;
+    const parsed = JSON.parse(raw);
+    // Migrate: reset layout if it's not the gridstack array format
+    if (parsed.dashboard?.grid) delete parsed.dashboard.grid;
+    if (parsed.dashboard?.layout && !Array.isArray(parsed.dashboard.layout)) {
+      delete parsed.dashboard.layout;
+    }
+    return deepMerge(base, parsed);
   } catch {
     return JSON.parse(JSON.stringify(DEFAULTS));
   }

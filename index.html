@@ -12,6 +12,10 @@
   <link rel="stylesheet" href="./css/layout.css">
   <link rel="stylesheet" href="./css/components.css">
 
+  <!-- Gridstack -->
+  <link rel="stylesheet" href="./node_modules/gridstack/dist/gridstack.min.css">
+  <script src="./node_modules/gridstack/dist/gridstack-all.js"></script>
+
   <!-- Lucide Icons -->
   <script src="./js/lucide.min.js"></script>
 </head>
@@ -33,6 +37,9 @@
           placeholder="Search notes..."
         />
       </div>
+
+      <!-- Dashboard contextual slot (replaces search when on dashboard) -->
+      <div id="header-contextual" hidden></div>
     </header>
 
     <!-- Main Content (Three Panels) -->
