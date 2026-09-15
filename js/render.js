@@ -3,6 +3,7 @@
 import { store } from './store.js';
 import { saveSettings } from './settings.js';
 import { getAllConversations, getCurrentConvId } from './advisor.js';
+import { applyAppearance } from './theme.js';
 
 let _grid = null; // active GridStack instance
 
@@ -61,19 +62,36 @@ export function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
 
+  const collapsed = localStorage.getItem('notely-sidebar-collapsed') === 'true';
+  if (collapsed) sidebar.classList.add('collapsed');
+  else sidebar.classList.remove('collapsed');
+
+  const chevron = collapsed ? 'chevron-right' : 'chevron-left';
+
   const html = `
+    <div class="sidebar-top">
+      <button class="sidebar-toggle" data-action="toggle-sidebar" title="${collapsed ? 'Expand sidebar' : 'Collapse sidebar'}">
+        <i data-lucide="${chevron}" width="14" height="14"></i>
+      </button>
+    </div>
+
     <!-- Dashboard / Calendar -->
     <div class="sidebar-section">
       <div class="sidebar-items">
-        <div class="sidebar-item ${store.currentView === 'dashboard' ? 'selected' : ''}" data-action="select-dashboard">
+        <div class="sidebar-item ${store.currentView === 'dashboard' ? 'selected' : ''}" data-action="select-dashboard" title="Dashboard">
           <i data-lucide="layout-dashboard"></i>
           <span class="sidebar-item-text">Dashboard</span>
         </div>
-        <div class="sidebar-item ${store.currentView === 'calendar' ? 'selected' : ''}" data-action="select-calendar">
+        ${store.currentView === 'dashboard' ? `
+        <div class="sidebar-item primary" data-action="toggle-add-widget-menu" title="Add widget">
+          <i data-lucide="plus-square"></i>
+          <span class="sidebar-item-text">Add widget</span>
+        </div>` : ''}
+        <div class="sidebar-item ${store.currentView === 'calendar' ? 'selected' : ''}" data-action="select-calendar" title="Calendar">
           <i data-lucide="calendar"></i>
           <span class="sidebar-item-text">Calendar</span>
         </div>
-        <div class="sidebar-item ${store.currentView === 'advisor' ? 'selected' : ''}" data-action="select-advisor">
+        <div class="sidebar-item ${store.currentView === 'advisor' ? 'selected' : ''}" data-action="select-advisor" title="${escapeHtml(store.settings?.advisor?.name || 'AI Advisor')}">
           <i data-lucide="bot"></i>
           <span class="sidebar-item-text">${escapeHtml(store.settings?.advisor?.name || 'AI Advisor')}</span>
         </div>
@@ -176,7 +194,7 @@ export function renderSidebar() {
 
     <!-- Settings (footer) -->
     <div class="sidebar-footer">
-      <div class="sidebar-item ${store.currentView === 'settings' ? 'selected' : ''}" data-action="select-settings">
+      <div class="sidebar-item ${store.currentView === 'settings' ? 'selected' : ''}" data-action="select-settings" title="Settings">
         <i data-lucide="settings"></i>
         <span class="sidebar-item-text">Settings</span>
       </div>
@@ -463,6 +481,7 @@ export function renderDashboard() {
   dashboardEl.hidden = false;
   ['tasks-view','calendar-view','settings-view','advisor-view'].forEach(id =>
     document.getElementById(id)?.setAttribute('hidden',''));
+  document.querySelector('.header')?.setAttribute('hidden', '');
 
   const ds = store.settings.dashboard;
   const layout = ds.layout; // [{id, x, y, w, h}]
@@ -514,44 +533,6 @@ export function renderDashboard() {
       ${emptyState}
     </div>`;
 
-  // Inject add-widget button into header, hide search
-  const tlItems = store.taskLists.map(list => {
-    const icon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
-    return `<div class="dash-add-menu-item" data-action="add-tasklist-widget" data-id="${list.id}">
-      <i data-lucide="${icon}" width="12" height="12"></i> ${escapeHtml(list.name)}
-    </div>`;
-  }).join('');
-  const nbItems = store.notebooks.map(nb => `
-    <div class="dash-add-menu-item" data-action="add-notebook-widget" data-id="${nb.id}">
-      <i data-lucide="book" width="12" height="12"></i> ${escapeHtml(nb.name)}
-    </div>`).join('');
-  const noteItems = store.notes.slice(0, 30).map(n => `
-    <div class="dash-add-menu-item" data-action="add-note-widget" data-id="${n.id}">
-      <i data-lucide="file-text" width="12" height="12"></i> ${escapeHtml(n.title || 'Untitled')}
-    </div>`).join('');
-  const ctx = document.getElementById('header-contextual');
-  if (ctx) {
-    const advisorName = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
-    const advisorInLayout = store.settings.dashboard.layout.some(l => l.id === 'advisor');
-    ctx.innerHTML = `
-      <div class="dash-add-menu-wrap">
-        <button class="dash-header-add-btn" data-action="toggle-add-widget-menu">+ Add widget</button>
-        <div class="dash-add-widget-menu" id="add-widget-menu" hidden>
-          <div class="dash-add-menu-section">AI</div>
-          <div class="dash-add-menu-item${advisorInLayout ? ' dash-add-menu-item-disabled' : ''}" data-action="add-advisor-widget">
-            <i data-lucide="bot" width="12" height="12"></i> ${advisorName}
-          </div>
-          ${store.taskLists.length ? `<div class="dash-add-menu-section">Task Lists</div>${tlItems}` : ''}
-          ${store.notebooks.length ? `<div class="dash-add-menu-section">Notebooks</div>${nbItems}` : ''}
-          <div class="dash-add-menu-section">Notes</div>
-          ${noteItems || '<div class="dash-add-menu-item dash-add-menu-empty">No notes yet</div>'}
-        </div>
-      </div>`;
-    ctx.hidden = false;
-  }
-  const searchEl = document.querySelector('.search-input-wrapper');
-  if (searchEl) searchEl.hidden = true;
-
   if (window.lucide) window.lucide.createIcons();
 
   // Initialize gridstack
@@ -586,6 +567,34 @@ export function renderDashboard() {
       }, 400);
     });
   }
+}
+
+// Map tool names to a predicate that returns true for widget IDs they affect
+const TOOL_WIDGET_MATCHER = {
+  add_task:      id => id.startsWith('tasklist-'),
+  complete_task: id => id.startsWith('tasklist-'),
+  delete_task:   id => id.startsWith('tasklist-'),
+  add_task_list: id => id.startsWith('tasklist-'),
+  add_note:      id => id === 'recentNotes' || id.startsWith('notebook-') || id.startsWith('note-'),
+  add_event:     id => id === 'events' || id === 'calendar',
+};
+
+export function refreshDashboardWidgets(toolName) {
+  const dashboardEl = document.getElementById('dashboard');
+  if (!dashboardEl || dashboardEl.hidden) return;
+  const matcher = TOOL_WIDGET_MATCHER[toolName];
+  if (!matcher) return;
+  const ds = store.settings.dashboard;
+  dashboardEl.querySelectorAll('.dash-widget').forEach(widget => {
+    const wid = widget.dataset.widgetId;
+    if (matcher(wid)) {
+      const body = widget.querySelector('.dash-widget-body');
+      if (body) {
+        body.innerHTML = buildWidgetContent(wid, ds);
+        if (window.lucide) window.lucide.createIcons({ nodes: Array.from(body.querySelectorAll('[data-lucide]')) });
+      }
+    }
+  });
 }
 
 function buildDayScheduleHTML(dateStr) {
@@ -764,6 +773,7 @@ function restoreHeaderSearch() {
   if (ctx) { ctx.innerHTML = ''; ctx.hidden = true; }
   const searchEl = document.querySelector('.search-input-wrapper');
   if (searchEl) searchEl.hidden = false;
+  document.querySelector('.header')?.removeAttribute('hidden');
 }
 
 export function showNotePanels() {
@@ -1029,6 +1039,54 @@ export function renderSettingsView() {
       </div>
 
       <div class="settings-card">
+        <div class="settings-card-title">Appearance</div>
+
+        <div class="settings-row">
+          <div class="settings-row-label">Theme</div>
+          <div class="settings-row-control">
+            <button class="theme-toggle" data-action="toggle-theme" title="Toggle theme">
+              <i data-lucide="${document.documentElement.dataset.theme === 'dark' ? 'moon' : 'sun'}"></i>
+            </button>
+            <span class="settings-row-hint">${document.documentElement.dataset.theme === 'dark' ? 'Dark' : 'Light'} mode</span>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-label">Background color</div>
+          <div class="settings-row-control settings-color-row">
+            <input type="color" class="settings-color-input" id="appearance-bg-color"
+              value="${s.appearance?.bgColor || '#FAF9F7'}" />
+            <button class="settings-link-btn" id="appearance-bg-reset">Reset</button>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-label">Accent color</div>
+          <div class="settings-row-control settings-color-row">
+            <input type="color" class="settings-color-input" id="appearance-accent-color"
+              value="${s.appearance?.accentColor || '#2D7D6F'}" />
+            <button class="settings-link-btn" id="appearance-accent-reset">Reset</button>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-label">Background image</div>
+          <div class="settings-row-control" id="appearance-image-control">
+            ${s.appearance?.bgImageSet
+              ? `<div class="settings-bg-preview">
+                   <img class="settings-bg-thumb" src="${localStorage.getItem('notely-bg-image') || ''}" />
+                   <button class="settings-link-btn settings-link-btn-danger" id="appearance-img-remove">Remove</button>
+                 </div>`
+              : `<button class="settings-upload-btn" id="appearance-img-pick">
+                   <i data-lucide="upload" width="13" height="13"></i> Upload image
+                 </button>
+                 <input type="file" id="appearance-img-upload" accept="image/*" style="display:none">`
+            }
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
         <div class="settings-card-title">AI Advisor</div>
         <div class="settings-row">
           <div class="settings-row-label">Name</div>
@@ -1072,9 +1130,107 @@ export function renderSettingsView() {
           </div>
         </div>
       </div>
+
+      <div class="settings-card settings-card-danger">
+        <div class="settings-card-title">Danger Zone</div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <span>Clear all data</span>
+            <span class="settings-row-hint">Permanently deletes all notes, notebooks, tasks, task lists, and events. Settings are kept.</span>
+          </div>
+          <div class="settings-row-control">
+            <button class="btn btn-danger" data-action="clear-all-data">Clear all data</button>
+          </div>
+        </div>
+      </div>
     </div>`;
 
   if (window.lucide) window.lucide.createIcons();
+
+  // ── Appearance settings ──────────────────────────────────────────
+  function saveAppearance() {
+    saveSettings(store.settings);
+    applyAppearance(store.settings.appearance);
+  }
+
+  document.getElementById('appearance-bg-color')?.addEventListener('input', e => {
+    if (!store.settings.appearance) store.settings.appearance = {};
+    store.settings.appearance.bgColor = e.target.value;
+    saveAppearance();
+  });
+  document.getElementById('appearance-bg-reset')?.addEventListener('click', () => {
+    if (!store.settings.appearance) store.settings.appearance = {};
+    store.settings.appearance.bgColor = '';
+    saveAppearance();
+    document.getElementById('appearance-bg-color').value = '#FAF9F7';
+  });
+
+  document.getElementById('appearance-accent-color')?.addEventListener('input', e => {
+    if (!store.settings.appearance) store.settings.appearance = {};
+    store.settings.appearance.accentColor = e.target.value;
+    saveAppearance();
+  });
+  document.getElementById('appearance-accent-reset')?.addEventListener('click', () => {
+    if (!store.settings.appearance) store.settings.appearance = {};
+    store.settings.appearance.accentColor = '';
+    saveAppearance();
+    document.getElementById('appearance-accent-color').value = '#2D7D6F';
+  });
+
+  function setImageCtrl(dataUrl) {
+    const ctrl = document.getElementById('appearance-image-control');
+    if (!ctrl) return;
+    if (dataUrl) {
+      ctrl.innerHTML = `<div class="settings-bg-preview">
+        <img class="settings-bg-thumb" src="${dataUrl}" />
+        <button class="settings-link-btn settings-link-btn-danger" id="appearance-img-remove">Remove</button>
+      </div>`;
+      document.getElementById('appearance-img-remove')?.addEventListener('click', removeImage);
+    } else {
+      ctrl.innerHTML = `<button class="settings-upload-btn" id="appearance-img-pick">
+        <i data-lucide="upload" width="13" height="13"></i> Upload image
+      </button>
+      <input type="file" id="appearance-img-upload" accept="image/*" style="display:none">`;
+      if (window.lucide) window.lucide.createIcons({ nodes: Array.from(ctrl.querySelectorAll('[data-lucide]')) });
+      attachUploadHandlers();
+    }
+  }
+
+  function attachUploadHandlers() {
+    document.getElementById('appearance-img-pick')?.addEventListener('click', () => {
+      document.getElementById('appearance-img-upload')?.click();
+    });
+    document.getElementById('appearance-img-upload')?.addEventListener('change', onImageUpload);
+  }
+
+  function onImageUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const dataUrl = ev.target.result;
+      try { localStorage.setItem('notely-bg-image', dataUrl); } catch {
+        alert('Image too large to store. Try a smaller file (under 4 MB).');
+        return;
+      }
+      if (!store.settings.appearance) store.settings.appearance = {};
+      store.settings.appearance.bgImageSet = true;
+      saveAppearance();
+      setImageCtrl(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function removeImage() {
+    localStorage.removeItem('notely-bg-image');
+    if (!store.settings.appearance) store.settings.appearance = {};
+    store.settings.appearance.bgImageSet = false;
+    saveAppearance();
+    setImageCtrl(null);
+  }
+
+  attachUploadHandlers();
+  document.getElementById('appearance-img-remove')?.addEventListener('click', removeImage);
 
   // Wire advisor settings inputs (save on blur/change)
   function saveAdvisorField(field, value) {
@@ -1641,7 +1797,7 @@ async function handleRemoveTag(tagId) {
 }
 
 // Helper: Escape HTML to prevent XSS
-function escapeHtml(text) {
+export function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;

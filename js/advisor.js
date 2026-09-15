@@ -2,6 +2,7 @@
 
 import { store } from './store.js';
 import { db } from './db.js';
+import { saveSettings } from './settings.js';
 
 // Session-local API history (full provider-format messages including tool call/result pairs)
 let _apiHistory = [];
@@ -134,6 +135,15 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} }
   },
   {
+    name: 'add_notebook',
+    description: 'Create a new notebook.',
+    input_schema: {
+      type: 'object',
+      required: ['name'],
+      properties: { name: { type: 'string' } }
+    }
+  },
+  {
     name: 'list_notes',
     description: 'List notes, optionally filtered by notebook or full-text search.',
     input_schema: {
@@ -181,12 +191,90 @@ const TOOLS = [
         time:  { type: 'string', description: 'HH:MM (24-hour, optional)' }
       }
     }
+  },
+  {
+    name: 'get_scratchpad',
+    description: 'Read the current contents of the dashboard scratchpad.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'set_scratchpad',
+    description: 'Replace the dashboard scratchpad contents.',
+    input_schema: {
+      type: 'object',
+      required: ['content'],
+      properties: { content: { type: 'string' } }
+    }
+  },
+  {
+    name: 'list_widgets',
+    description: 'List widgets currently on the dashboard (instances only). Each entry has widget_id, position, and size. To discover all widgets that could be added — including task lists, notebooks, and notes by title — use list_available_widgets instead.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_available_widgets',
+    description: 'List the full catalog of widgets that can be placed on the dashboard: fixed built-in widgets plus one entry per task list, notebook, and note. Each entry includes widget_id, title, type, and whether it is currently on the dashboard. Use this to find the widget_id for a specific task list ("Shopping List"), notebook, or note by name before calling add_widget or remove_widget.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'add_widget',
+    description: 'Add a widget to the dashboard by widget_id. Call list_available_widgets first to find the correct widget_id — especially for task lists, notebooks, and notes which use dynamic ids like "tasklist-3".',
+    input_schema: {
+      type: 'object',
+      required: ['widget_id'],
+      properties: { widget_id: { type: 'string', description: 'From list_available_widgets. Fixed: calendar | events | scratchpad | recentNotes | advisor. Dynamic: tasklist-{id} | notebook-{id} | note-{id}' } }
+    }
+  },
+  {
+    name: 'remove_widget',
+    description: 'Remove a widget from the dashboard by widget_id. Call list_available_widgets or list_widgets first to find the correct id.',
+    input_schema: {
+      type: 'object',
+      required: ['widget_id'],
+      properties: { widget_id: { type: 'string', description: 'From list_available_widgets or list_widgets. Same id format as add_widget.' } }
+    }
+  },
+  {
+    name: 'delete_task_list',
+    description: 'Permanently delete a task list and all its tasks. Also removes the list\'s dashboard widget if present. Use list_task_lists to find the id first.',
+    input_schema: {
+      type: 'object',
+      required: ['list_id'],
+      properties: { list_id: { type: 'integer', description: 'id from list_task_lists' } }
+    }
+  },
+  {
+    name: 'delete_note',
+    description: 'Permanently delete a note. Also removes the note\'s dashboard widget if present. Use list_notes to find the id first.',
+    input_schema: {
+      type: 'object',
+      required: ['note_id'],
+      properties: { note_id: { type: 'integer', description: 'id from list_notes' } }
+    }
+  },
+  {
+    name: 'delete_notebook',
+    description: 'Permanently delete a notebook. Notes inside it are kept but unassigned. Also removes the notebook\'s dashboard widget if present. Use list_notebooks to find the id first.',
+    input_schema: {
+      type: 'object',
+      required: ['notebook_id'],
+      properties: { notebook_id: { type: 'integer', description: 'id from list_notebooks' } }
+    }
+  },
+  {
+    name: 'delete_event',
+    description: 'Permanently delete a calendar event. Use list_events to find the id first.',
+    input_schema: {
+      type: 'object',
+      required: ['event_id'],
+      properties: { event_id: { type: 'integer', description: 'id from list_events' } }
+    }
   }
 ];
 
 // ── Tool executor ────────────────────────────────────────────────
 
-async function executeTool(name, input) {
+export async function executeTool(name, input) {
   try {
     const pad = n => String(n).padStart(2, '0');
     const today = new Date();
@@ -232,8 +320,29 @@ async function executeTool(name, input) {
         return { success: true, task_list: list };
       }
 
+      case 'delete_task_list': {
+        await db.run('DELETE FROM tasks WHERE list_id = ?', [input.list_id]);
+        await db.run('DELETE FROM task_lists WHERE id = ?', [input.list_id]);
+        store.tasks = store.tasks.filter(t => t.list_id !== input.list_id);
+        store.taskLists = store.taskLists.filter(l => l.id !== input.list_id);
+        const widgetId = `tasklist-${input.list_id}`;
+        if (store.settings.dashboard.layout.find(l => l.id === widgetId)) {
+          store.settings.dashboard.layout = store.settings.dashboard.layout.filter(l => l.id !== widgetId);
+          saveSettings(store.settings);
+        }
+        return { success: true };
+      }
+
       case 'list_notebooks':
         return { notebooks: await db.all('SELECT id, name FROM notebooks ORDER BY name ASC') };
+
+      case 'add_notebook': {
+        const res = await db.run('INSERT INTO notebooks (name) VALUES (?)', [input.name]);
+        const notebook = await db.get('SELECT id, name FROM notebooks WHERE id = ?', [res.lastInsertId]);
+        store.notebooks.push(notebook);
+        store.notebooks.sort((a, b) => a.name.localeCompare(b.name));
+        return { success: true, notebook };
+      }
 
       case 'list_notes': {
         let sql = `SELECT n.id, n.title, n.created_at, nb.name as notebook_name
@@ -271,6 +380,85 @@ async function executeTool(name, input) {
         store.events.sort((a, b) => a.date.localeCompare(b.date) || (a.time||'').localeCompare(b.time||''));
         return { success: true, event: ev };
       }
+
+      case 'delete_event':
+        await db.run('DELETE FROM events WHERE id = ?', [input.event_id]);
+        store.events = store.events.filter(e => e.id !== input.event_id);
+        return { success: true };
+
+      case 'delete_note': {
+        await db.run('DELETE FROM notes WHERE id = ?', [input.note_id]);
+        store.notes = store.notes.filter(n => n.id !== input.note_id);
+        const noteWidgetId = `note-${input.note_id}`;
+        if (store.settings.dashboard.layout.find(l => l.id === noteWidgetId)) {
+          store.settings.dashboard.layout = store.settings.dashboard.layout.filter(l => l.id !== noteWidgetId);
+          saveSettings(store.settings);
+        }
+        return { success: true };
+      }
+
+      case 'delete_notebook': {
+        await db.run('UPDATE notes SET notebook_id = NULL WHERE notebook_id = ?', [input.notebook_id]);
+        await db.run('DELETE FROM notebooks WHERE id = ?', [input.notebook_id]);
+        store.notebooks = store.notebooks.filter(nb => nb.id !== input.notebook_id);
+        store.notes.forEach(n => { if (n.notebook_id === input.notebook_id) n.notebook_id = null; });
+        const nbWidgetId = `notebook-${input.notebook_id}`;
+        if (store.settings.dashboard.layout.find(l => l.id === nbWidgetId)) {
+          store.settings.dashboard.layout = store.settings.dashboard.layout.filter(l => l.id !== nbWidgetId);
+          saveSettings(store.settings);
+        }
+        return { success: true };
+      }
+
+      case 'get_scratchpad':
+        return { content: localStorage.getItem('notely-scratchpad') || '' };
+
+      case 'set_scratchpad': {
+        const val = input.content ?? '';
+        localStorage.setItem('notely-scratchpad', val);
+        const el = document.getElementById('scratchpad');
+        if (el) el.value = val;
+        return { success: true };
+      }
+
+      case 'list_widgets':
+        return { widgets: store.settings.dashboard.layout.map(w => ({ widget_id: w.id, x: w.x, y: w.y, w: w.w, h: w.h })) };
+
+      case 'list_available_widgets': {
+        const onDashboard = new Set(store.settings.dashboard.layout.map(l => l.id));
+        const fixed = [
+          { widget_id: 'calendar',    type: 'fixed', title: 'Calendar' },
+          { widget_id: 'events',      type: 'fixed', title: 'Events' },
+          { widget_id: 'scratchpad',  type: 'fixed', title: 'Scratchpad' },
+          { widget_id: 'recentNotes', type: 'fixed', title: 'Recent Notes' },
+          { widget_id: 'advisor',     type: 'fixed', title: 'AI Advisor' },
+        ];
+        const taskLists = await db.all('SELECT id, name FROM task_lists ORDER BY created_at ASC');
+        const notebooks = await db.all('SELECT id, name FROM notebooks ORDER BY name ASC');
+        const notes     = await db.all('SELECT id, title FROM notes ORDER BY created_at DESC LIMIT 20');
+        return {
+          widgets: [
+            ...fixed.map(w => ({ ...w, on_dashboard: onDashboard.has(w.widget_id) })),
+            ...taskLists.map(l => ({ widget_id: `tasklist-${l.id}`,  type: 'task_list', title: l.name,  on_dashboard: onDashboard.has(`tasklist-${l.id}`) })),
+            ...notebooks.map(n => ({ widget_id: `notebook-${n.id}`,  type: 'notebook',  title: n.name,  on_dashboard: onDashboard.has(`notebook-${n.id}`) })),
+            ...notes.map(n =>     ({ widget_id: `note-${n.id}`,      type: 'note',      title: n.title, on_dashboard: onDashboard.has(`note-${n.id}`) })),
+          ]
+        };
+      }
+
+      case 'add_widget': {
+        const layout = store.settings.dashboard.layout;
+        if (layout.find(l => l.id === input.widget_id)) return { success: true, message: 'already on dashboard' };
+        const size = input.widget_id.startsWith('note-') ? { w: 4, h: 4 } : { w: 4, h: 5 };
+        layout.push({ id: input.widget_id, x: 0, y: 9999, ...size });
+        saveSettings(store.settings);
+        return { success: true };
+      }
+
+      case 'remove_widget':
+        store.settings.dashboard.layout = store.settings.dashboard.layout.filter(l => l.id !== input.widget_id);
+        saveSettings(store.settings);
+        return { success: true };
 
       default:
         return { error: `Unknown tool: ${name}` };

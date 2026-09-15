@@ -2,10 +2,10 @@
 
 import { db, waitForReady } from './db.js';
 import { store } from './store.js';
-import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderAdvisorView, renderSettingsView, showNotePanels, showConfirmDialog, showToast } from './render.js';
-import { runAdvisor, clearAdvisorHistory, startNewConversation, loadConversation, getAllConversations } from './advisor.js';
+import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderAdvisorView, renderSettingsView, showNotePanels, showConfirmDialog, showToast, refreshDashboardWidgets, escapeHtml } from './render.js';
+import { runAdvisor, clearAdvisorHistory, startNewConversation, loadConversation, getAllConversations, executeTool } from './advisor.js';
 import { saveSettings } from './settings.js';
-import { initTheme, toggleTheme } from './theme.js';
+import { initTheme, toggleTheme, applyAppearance } from './theme.js';
 import { initEditor, refreshAttachmentTray } from './editor.js';
 import { initShortcuts } from './shortcuts.js';
 
@@ -199,8 +199,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  // Apply user appearance customisations (colors, bg image) before revealing the app
+  applyAppearance(store.settings.appearance);
+
   // Restore route from URL hash (or default to all-notes view)
   await applyRoute();
+
+  // Reveal the app now that theme + layout are fully applied (prevents flicker)
+  document.documentElement.classList.remove('app-loading');
+
+  // Register tools via WebMCP (Chrome 146+).
+  // The extension may inject document.modelContext after the page loads,
+  // so poll until it appears (stops after 30 s).
+  (function pollWebMCP() {
+    if (document.modelContext) {
+      registerWebMCPTools().catch(() => {});
+    } else {
+      let attempts = 0;
+      const iv = setInterval(() => {
+        if (document.modelContext) {
+          clearInterval(iv);
+          registerWebMCPTools().catch(() => {});
+        } else if (++attempts > 60) {
+          clearInterval(iv);
+        }
+      }, 500);
+    }
+  })();
 
   // Initialize Lucide icons
   if (window.lucide) {
@@ -247,18 +272,19 @@ function setupEventListeners() {
   document.getElementById('advisor-view')?.addEventListener('click', handleDashboardClick);
   document.getElementById('advisor-view')?.addEventListener('keydown', handleDashboardKeydown);
 
-  // Header contextual slot (add-widget menu when on dashboard)
+  // Header contextual slot (legacy; add-widget FAB is now on document.body)
   document.getElementById('header-contextual')?.addEventListener('click', handleDashboardClick);
+
 
   // Settings view event delegation
   document.getElementById('settings-view')?.addEventListener('change', handleSettingsChange);
   document.getElementById('settings-view')?.addEventListener('input', handleSettingsInput);
+  document.getElementById('settings-view')?.addEventListener('click', handleSettingsClick);
 
   // Hash-based routing (back/forward navigation)
   window.addEventListener('hashchange', applyRoute);
 
-  // Theme toggle
-  document.querySelector('.theme-toggle')?.addEventListener('click', handleThemeToggle);
+  // Theme toggle (header removed; handled via sidebar + settings click delegation)
 
   // Search input
   const searchInput = document.querySelector('.search-input');
@@ -284,6 +310,19 @@ async function handleSidebarClick(event) {
   if (!target) return;
 
   const action = target.dataset.action;
+
+  if (action === 'toggle-sidebar') {
+    const sidebar = document.getElementById('sidebar');
+    const collapsed = sidebar.classList.toggle('collapsed');
+    localStorage.setItem('notely-sidebar-collapsed', collapsed);
+    renderSidebar();
+    return;
+  }
+
+  if (action === 'toggle-add-widget-menu') {
+    handleDashboardClick(event);
+    return;
+  }
 
   // Handle delete notebook separately (prevent propagation)
   if (action === 'delete-notebook') {
@@ -518,13 +557,9 @@ async function handleNoteListClick(event) {
 
 // Handle theme toggle
 function handleThemeToggle() {
-  const newTheme = toggleTheme();
-  console.log('Theme switched to:', newTheme);
-
-  // Re-initialize Lucide icons after theme change
-  if (window.lucide) {
-    window.lucide.createIcons();
-  }
+  toggleTheme();
+  renderSidebar();
+  if (store.currentView === 'settings') renderSettingsView();
 }
 
 // Handle editor clicks
@@ -664,20 +699,57 @@ async function handleDashboardClick(event) {
     rerenderActiveView();
 
   } else if (action === 'toggle-add-widget-menu') {
-    const menu = document.getElementById('add-widget-menu');
-    if (!menu) return;
-    menu.hidden = !menu.hidden;
-    if (!menu.hidden) {
-      const closeMenu = (e) => {
-        if (!menu.contains(e.target) && e.target !== target) {
-          menu.hidden = true;
-          document.removeEventListener('click', closeMenu, true);
-        }
-      };
-      setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
-    }
+    // Close if already open
+    const existing = document.getElementById('add-widget-menu');
+    if (existing) { existing.remove(); return; }
+
+    // Build menu content
+    const advisorName = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
+    const advisorInLayout = store.settings.dashboard.layout.some(l => l.id === 'advisor');
+    const tlItems = store.taskLists.map(list => {
+      const icon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
+      return `<div class="dash-add-menu-item" data-action="add-tasklist-widget" data-id="${list.id}">
+        <i data-lucide="${icon}" width="12" height="12"></i> ${escapeHtml(list.name)}</div>`;
+    }).join('');
+    const nbItems = store.notebooks.map(nb =>
+      `<div class="dash-add-menu-item" data-action="add-notebook-widget" data-id="${nb.id}">
+        <i data-lucide="book" width="12" height="12"></i> ${escapeHtml(nb.name)}</div>`).join('');
+    const noteItems = store.notes.slice(0, 30).map(n =>
+      `<div class="dash-add-menu-item" data-action="add-note-widget" data-id="${n.id}">
+        <i data-lucide="file-text" width="12" height="12"></i> ${escapeHtml(n.title || 'Untitled')}</div>`).join('');
+
+    const menu = document.createElement('div');
+    menu.id = 'add-widget-menu';
+    menu.className = 'dash-add-widget-menu dash-add-widget-menu-fixed';
+    menu.innerHTML = `
+      <div class="dash-add-menu-section">AI</div>
+      <div class="dash-add-menu-item${advisorInLayout ? ' dash-add-menu-item-disabled' : ''}" data-action="add-advisor-widget">
+        <i data-lucide="bot" width="12" height="12"></i> ${advisorName}</div>
+      ${store.taskLists.length ? `<div class="dash-add-menu-section">Task Lists</div>${tlItems}` : ''}
+      ${store.notebooks.length ? `<div class="dash-add-menu-section">Notebooks</div>${nbItems}` : ''}
+      <div class="dash-add-menu-section">Notes</div>
+      ${noteItems || '<div class="dash-add-menu-item dash-add-menu-empty">No notes yet</div>'}`;
+    document.body.appendChild(menu);
+    if (window.lucide) window.lucide.createIcons({ nodes: Array.from(menu.querySelectorAll('[data-lucide]')) });
+
+    // Position to the right of the triggering sidebar item
+    const rect = target.getBoundingClientRect();
+    menu.style.top = `${rect.top}px`;
+    menu.style.left = `${rect.right + 4}px`;
+
+    // Route menu item clicks through the dashboard handler
+    menu.addEventListener('click', handleDashboardClick);
+
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target) && e.target !== target && !target.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
 
   } else if (action === 'add-tasklist-widget') {
+    document.getElementById('add-widget-menu')?.remove();
     const widgetId = `tasklist-${target.dataset.id}`;
     const layout = store.settings.dashboard.layout;
     if (!layout.find(l => l.id === widgetId)) {
@@ -687,6 +759,7 @@ async function handleDashboardClick(event) {
     renderDashboard();
 
   } else if (action === 'add-notebook-widget') {
+    document.getElementById('add-widget-menu')?.remove();
     const widgetId = `notebook-${target.dataset.id}`;
     const layout = store.settings.dashboard.layout;
     if (!layout.find(l => l.id === widgetId)) {
@@ -696,6 +769,7 @@ async function handleDashboardClick(event) {
     renderDashboard();
 
   } else if (action === 'add-note-widget') {
+    document.getElementById('add-widget-menu')?.remove();
     const widgetId = `note-${target.dataset.id}`;
     const layout = store.settings.dashboard.layout;
     if (!layout.find(l => l.id === widgetId)) {
@@ -748,6 +822,7 @@ async function handleDashboardClick(event) {
     if (conv) { loadConversation(conv); renderAdvisorView(); }
 
   } else if (action === 'add-advisor-widget') {
+    document.getElementById('add-widget-menu')?.remove();
     const already = store.settings.dashboard.layout.some(l => l.id === 'advisor');
     if (!already) {
       store.settings.dashboard.layout.push({ id: 'advisor', x: 0, y: 9999, w: 4, h: 6 });
@@ -860,6 +935,88 @@ function handleSettingsInput(event) {
   const input = event.target;
   if (input.type !== 'number') return;
   applySettingChange(input);
+}
+
+// Handle button clicks in settings view
+async function handleSettingsClick(event) {
+  const btn = event.target.closest('[data-action]');
+  if (!btn) return;
+  if (btn.dataset.action === 'toggle-theme') {
+    handleThemeToggle();
+  } else if (btn.dataset.action === 'clear-all-data') {
+    await clearAllData();
+  }
+}
+
+async function clearAllData() {
+  const confirmed = await showTypeConfirmDialog(
+    'Clear all data?',
+    'This will permanently delete <strong>all notes, notebooks, tasks, task lists, and events</strong>. This cannot be undone.',
+    'DELETE'
+  );
+  if (!confirmed) return;
+
+  await db.run('DELETE FROM notes');
+  await db.run('DELETE FROM notebooks');
+  await db.run('DELETE FROM tasks');
+  await db.run('DELETE FROM task_lists');
+  await db.run('DELETE FROM events');
+
+  store.notes = [];
+  store.notebooks = [];
+  store.tasks = [];
+  store.taskLists = [];
+  store.events = [];
+  store.currentNote = null;
+  store.currentNotebook = null;
+  store.currentTaskList = null;
+
+  renderSidebar();
+  showToast('All data cleared.', 'success');
+}
+
+// Dialog that requires the user to type a specific word before confirming
+function showTypeConfirmDialog(title, htmlMessage, requiredWord) {
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return new Promise((resolve) => {
+    const container = document.getElementById('dialog-container');
+    if (!container) { resolve(false); return; }
+
+    container.innerHTML = `
+      <div class="dialog-overlay">
+        <div class="confirm-dialog">
+          <div class="confirm-dialog-title">${esc(title)}</div>
+          <div class="confirm-dialog-body">${htmlMessage}</div>
+          <div class="confirm-dialog-body" style="margin-top:12px">
+            Type <strong>${esc(requiredWord)}</strong> to confirm:
+          </div>
+          <input id="type-confirm-input" type="text" class="settings-text-input"
+            placeholder="${esc(requiredWord)}" autocomplete="off"
+            style="margin-top:8px;width:100%;box-sizing:border-box" />
+          <div class="confirm-dialog-buttons">
+            <button class="confirm-dialog-button cancel" id="type-confirm-cancel">Cancel</button>
+            <button class="confirm-dialog-button danger" id="type-confirm-ok" disabled>Confirm</button>
+          </div>
+        </div>
+      </div>`;
+
+    const input = container.querySelector('#type-confirm-input');
+    const okBtn = container.querySelector('#type-confirm-ok');
+    const cancelBtn = container.querySelector('#type-confirm-cancel');
+
+    const close = (result) => { container.innerHTML = ''; resolve(result); };
+
+    input.addEventListener('input', () => {
+      okBtn.disabled = input.value !== requiredWord;
+    });
+    okBtn.addEventListener('click', () => { if (input.value === requiredWord) close(true); });
+    cancelBtn.addEventListener('click', () => close(false));
+    container.querySelector('.dialog-overlay').addEventListener('click', e => {
+      if (e.target === e.currentTarget) close(false);
+    });
+
+    setTimeout(() => input.focus(), 50);
+  });
 }
 
 // Re-render whichever feature view is currently active
@@ -1147,3 +1304,229 @@ window.store = store;
 window.createNote = createNote;
 window.deleteNote = deleteNote;
 window.deleteNotebook = deleteNotebook;
+
+// Tools that mutate data and require a view refresh after execution
+const MUTATING_TOOLS = new Set([
+  'add_task', 'complete_task', 'delete_task', 'add_task_list', 'delete_task_list',
+  'add_note', 'delete_note', 'add_notebook', 'delete_notebook',
+  'add_event', 'delete_event',
+  'add_widget', 'remove_widget',
+]);
+
+// Tools that also update the sidebar (new entities appear there)
+const SIDEBAR_MUTATING_TOOLS = new Set([
+  'add_task_list', 'delete_task_list',
+  'add_note', 'delete_note', 'add_notebook', 'delete_notebook',
+  'add_event', 'delete_event',
+]);
+
+function refreshCurrentView(toolName) {
+  const view = store.currentView;
+  if (view === 'dashboard') {
+    if (toolName === 'add_widget' || toolName === 'remove_widget') {
+      renderDashboard();
+    } else {
+      refreshDashboardWidgets(toolName);
+    }
+  } else if (view === 'tasks') {
+    renderTasksView();
+  } else if (view === 'calendar') {
+    renderCalendarView();
+  } else if (view === 'notes') {
+    renderNoteList();
+  }
+  if (SIDEBAR_MUTATING_TOOLS.has(toolName)) renderSidebar();
+}
+
+// Handle tool calls relayed from background.js (extension context only)
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    const { tool, args } = message || {};
+    if (!tool) return false;
+    executeTool(tool, args || {}).then(result => {
+      sendResponse(result);
+      if (!result?.error && MUTATING_TOOLS.has(tool)) refreshCurrentView(tool);
+    });
+    return true;
+  });
+}
+
+// Register Notely tools via WebMCP (Chrome 146+) so any WebMCP-aware agent can call them
+async function registerWebMCPTools() {
+  if (!document.modelContext) return;
+
+  const tools = [
+    {
+      name: 'list_task_lists',
+      description: 'List all task lists with their id, name, and type.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'list_tasks',
+      description: 'List tasks. Optionally filter by list_id or completion status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          list_id:   { type: 'integer', description: 'Filter to one task list' },
+          completed: { type: 'boolean', description: 'true = done, false = pending, omit = all' },
+          limit:     { type: 'integer', description: 'Max results, default 30' }
+        }
+      },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'add_task',
+      description: 'Add a new task to a task list.',
+      inputSchema: {
+        type: 'object',
+        required: ['text', 'list_id'],
+        properties: {
+          text:     { type: 'string' },
+          list_id:  { type: 'integer' },
+          quantity: { type: 'integer', description: 'For quantity-type lists, default 1' }
+        }
+      }
+    },
+    {
+      name: 'complete_task',
+      description: 'Mark a task as completed.',
+      inputSchema: {
+        type: 'object',
+        required: ['task_id'],
+        properties: { task_id: { type: 'integer' } }
+      }
+    },
+    {
+      name: 'delete_task',
+      description: 'Delete a task permanently.',
+      inputSchema: {
+        type: 'object',
+        required: ['task_id'],
+        properties: { task_id: { type: 'integer' } }
+      },
+      annotations: { consequentialHint: true }
+    },
+    {
+      name: 'add_task_list',
+      description: 'Create a new task list.',
+      inputSchema: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: { type: 'string' },
+          type: { type: 'string', enum: ['basic', 'priority', 'quantity'], description: 'Default: basic' }
+        }
+      }
+    },
+    {
+      name: 'list_notebooks',
+      description: 'List all notebooks.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'list_notes',
+      description: 'List notes, optionally filtered by notebook or full-text search.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          notebook_id: { type: 'integer' },
+          search:      { type: 'string', description: 'Search in title and body' },
+          limit:       { type: 'integer', description: 'Max results, default 10' }
+        }
+      },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'add_note',
+      description: 'Create a new note.',
+      inputSchema: {
+        type: 'object',
+        required: ['title'],
+        properties: {
+          title:       { type: 'string' },
+          body:        { type: 'string', description: 'Markdown content' },
+          notebook_id: { type: 'integer' }
+        }
+      }
+    },
+    {
+      name: 'list_events',
+      description: 'List calendar events within a date range.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          date_from: { type: 'string', description: 'YYYY-MM-DD, defaults to today' },
+          date_to:   { type: 'string', description: 'YYYY-MM-DD, defaults to 30 days from today' }
+        }
+      },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'add_event',
+      description: 'Add a calendar event.',
+      inputSchema: {
+        type: 'object',
+        required: ['title', 'date'],
+        properties: {
+          title: { type: 'string' },
+          date:  { type: 'string', description: 'YYYY-MM-DD' },
+          time:  { type: 'string', description: 'HH:MM (24-hour, optional)' }
+        }
+      }
+    },
+    {
+      name: 'get_scratchpad',
+      description: 'Read the current contents of the dashboard scratchpad.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'set_scratchpad',
+      description: 'Replace the dashboard scratchpad contents.',
+      inputSchema: {
+        type: 'object',
+        required: ['content'],
+        properties: { content: { type: 'string' } }
+      }
+    },
+    {
+      name: 'list_widgets',
+      description: 'List all widgets currently on the dashboard.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true }
+    },
+    {
+      name: 'add_widget',
+      description: 'Add a widget to the dashboard by id.',
+      inputSchema: {
+        type: 'object',
+        required: ['widget_id'],
+        properties: { widget_id: { type: 'string', description: 'e.g. calendar, scratchpad, tasklist-2' } }
+      }
+    },
+    {
+      name: 'remove_widget',
+      description: 'Remove a widget from the dashboard by id.',
+      inputSchema: {
+        type: 'object',
+        required: ['widget_id'],
+        properties: { widget_id: { type: 'string' } }
+      }
+    }
+  ];
+
+  await Promise.all(tools.map(({ name, description, inputSchema, annotations }) =>
+    document.modelContext.registerTool(
+      { name, description, inputSchema, annotations },
+      async (input) => {
+        const result = await executeTool(name, input);
+        if (!result?.error && MUTATING_TOOLS.has(name)) refreshCurrentView(name);
+        return result;
+      }
+    )
+  ));
+
+  console.log('[Notely] WebMCP tools registered:', tools.map(t => t.name));
+}

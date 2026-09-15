@@ -9,6 +9,22 @@
   overflow: hidden;
 }
 
+/* Background image mode — frosted-glass panels so the wallpaper shows through */
+html.has-bg-image .header {
+  background: color-mix(in srgb, var(--color-surface) 2%, transparent);
+}
+html.has-bg-image .sidebar {
+  background: color-mix(in srgb, var(--color-bg) 82%, transparent);
+}
+html.has-bg-image .note-list,
+html.has-bg-image .editor,
+html.has-bg-image .feature-view {
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+}
+html.has-bg-image .dashboard {
+  background: color-mix(in srgb, var(--color-surface) 2%, transparent);
+}
+
 /* Header */
 .header {
   height: 48px;
@@ -40,6 +56,59 @@
   overflow-x: hidden;
   padding: var(--space-lg) var(--space-md);
   flex-shrink: 0;
+  transition: width 200ms ease, padding 200ms ease;
+}
+
+.sidebar.collapsed {
+  width: 48px;
+  padding: var(--space-lg) var(--space-xs);
+}
+
+.sidebar.collapsed .sidebar-item-text,
+.sidebar.collapsed .sidebar-section-header,
+.sidebar.collapsed .sidebar-item-delete,
+.sidebar.collapsed .sidebar-item-badge {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.collapsed .sidebar-section + .sidebar-section {
+  margin-top: var(--space-md);
+}
+
+/* Sidebar collapse toggle button */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  transition: color 100ms, background 100ms;
+}
+.sidebar-toggle:hover {
+  background: var(--color-border-muted);
+  color: var(--color-text);
+}
+
+/* Top row of sidebar: toggle button right-aligned */
+.sidebar-top {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-sm);
+}
+
+.sidebar.collapsed .sidebar-top {
+  justify-content: center;
 }
 
 /* Note List (middle panel) */
@@ -639,8 +708,8 @@
 
 /* Quantity input — in add row */
 .task-qty-add {
-  width: 60px !important;
-  flex-shrink: 0;
+  flex: 0 0 60px;
+  width: 60px;
   text-align: center;
   appearance: textfield;
 }
@@ -1016,7 +1085,6 @@
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  overflow: hidden;
   max-width: 640px;
 }
 
@@ -1172,6 +1240,23 @@
   padding: 4px;
 }
 
+/* ── Main row inside dashboard: scrollable grid + right FAB column ─── */
+.dash-main-row {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+/* ── FAB bar — non-scrolling right column ─── */
+.dash-fab-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 6px;
+}
+
 /* ── Widget card ─── */
 /* NOTE: .dash-widget is also .grid-stack-item-content, which gridstack
    positions absolutely (top/left/right/bottom:0). Do NOT set position,
@@ -1282,6 +1367,7 @@
   margin-left: auto;
 }
 
+/* .dash-header-add-btn kept for reference but no longer used */
 .dash-header-add-btn {
   height: 32px;
   padding: 0 14px;
@@ -1298,16 +1384,12 @@
   opacity: 0.88;
 }
 
-/* ── Add widget dropdown ─── */
-.dash-add-menu-wrap {
+/* ── Add widget FAB + dropdown ─── */
+.dash-fab-wrap {
   position: relative;
 }
 
 .dash-add-widget-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 200;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -1316,6 +1398,17 @@
   max-height: 340px;
   overflow-y: auto;
   padding: 4px 0;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 200;
+}
+
+.dash-add-widget-menu-fixed {
+  position: fixed;
+  bottom: unset;
+  right: unset;
+  z-index: 1000;
 }
 
 .dash-add-menu-section {
@@ -1815,4 +1908,90 @@
 .dash-add-menu-item-disabled {
   opacity: 0.4;
   pointer-events: none;
+}
+
+/* ── Appearance settings ─────────────────────────────────────── */
+.settings-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.settings-color-input {
+  width: 36px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: none;
+}
+
+.settings-link-btn {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-sans);
+}
+.settings-link-btn:hover { color: var(--color-text); }
+.settings-link-btn-danger:hover { color: var(--color-danger); }
+
+.settings-bg-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.settings-bg-thumb {
+  width: 80px;
+  height: 50px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+
+.settings-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  background: var(--color-surface);
+  transition: border-color 150ms, color 150ms;
+}
+.settings-upload-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.settings-card-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  color: var(--color-danger);
+  font-family: var(--font-sans);
+  background: transparent;
+  transition: background 150ms, color 150ms;
+}
+.btn-danger:hover {
+  background: var(--color-danger);
+  color: #fff;
 }

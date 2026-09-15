@@ -16,13 +16,17 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Suppress all transitions during initial load to prevent theme/layout flash */
+html.app-loading * { transition: none !important; }
+html.app-loading body { opacity: 0; }
+
 body {
   font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: 1.6;
   color: var(--color-text);
   background-color: var(--color-bg);
-  transition: background-color 200ms ease-out, color 200ms ease-out;
+  transition: background-color 200ms ease-out, color 200ms ease-out, opacity 120ms ease;
 }
 
 /* Smooth theme transitions for all elements */

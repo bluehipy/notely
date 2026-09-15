@@ -1,6 +1,11 @@
 // Settings persistence - Notely
 
 const DEFAULTS = {
+  appearance: {
+    bgColor: '',      // '' = use theme default
+    accentColor: '',  // '' = use theme default
+    bgImageSet: false // true when an image is stored in localStorage key notely-bg-image
+  },
   advisor: {
     name: 'AI Advisor',
     provider: 'auto',

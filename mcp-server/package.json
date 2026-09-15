@@ -1,0 +1,19 @@
+{
+  "name": "notely-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Notely Chrome extension — lets Claude Desktop manage your notes, tasks and calendar",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "notely-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js --port 377"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

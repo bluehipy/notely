@@ -3,8 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Freeze document.domain before any script runs to prevent legacy libs from setting it,
+       which would break origin isolation required by WebMCP. -->
+  <script src="js/freeze-domain.js"></script>
   <title>Notely - Your Personal Note-Taking App</title>
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+
+  <!-- Apply theme before first paint; must run before CSS so no flash -->
+  <script src="js/theme-init.js"></script>
 
   <!-- CSS -->
   <link rel="stylesheet" href="./css/variables.css">
@@ -23,11 +29,6 @@
   <div class="app-container">
     <!-- Header Bar -->
     <header class="header">
-      <!-- Theme Toggle -->
-      <button class="theme-toggle" title="Toggle theme">
-        <i data-lucide="sun"></i>
-      </button>
-
       <!-- Search Input -->
       <div class="search-input-wrapper">
         <i class="search-input-icon" data-lucide="search"></i>
