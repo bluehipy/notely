@@ -694,9 +694,19 @@ async function handleDashboardClick(event) {
   } else if (action === 'cal-delete-event') {
     event.stopPropagation();
     const evId = parseInt(target.dataset.id);
-    await db.run('DELETE FROM events WHERE id = ?', [evId]);
-    store.events = store.events.filter(e => e.id !== evId);
-    rerenderActiveView();
+    try {
+      await showConfirmDialog(
+        'Delete event?',
+        'This action cannot be undone.',
+        async () => {
+          await db.run('DELETE FROM events WHERE id = ?', [evId]);
+          store.events = store.events.filter(e => e.id !== evId);
+          rerenderActiveView();
+        }
+      );
+    } catch (error) {
+      // User cancelled - do nothing
+    }
 
   } else if (action === 'toggle-add-widget-menu') {
     // Close if already open

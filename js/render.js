@@ -621,8 +621,8 @@ function buildDayScheduleHTML(dateStr) {
         <span class="ds-allday-label">All day</span>
         <div class="ds-allday-events">
           ${allDayEvents.map(ev => `
-            <div class="ds-allday-event" data-action="cal-delete-event" data-id="${ev.id}" title="Click to delete">
-              ${escapeHtml(ev.title)} <span class="ds-event-x">×</span>
+            <div class="ds-allday-event" title="${escapeHtml(ev.title)}">
+              ${escapeHtml(ev.title)} <span class="ds-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
             </div>`).join('')}
         </div>
        </div>`
@@ -638,10 +638,10 @@ function buildDayScheduleHTML(dateStr) {
       ? `<div class="ds-now-line" style="top:${(nowMin / 60) * 100}%"></div>`
       : '';
     const evHTML = evs.map(ev => `
-      <div class="ds-event" data-action="cal-delete-event" data-id="${ev.id}" title="Click to delete">
+      <div class="ds-event" title="${escapeHtml(ev.title)}">
         <span class="ds-event-time">${escapeHtml(ev.time)}</span>
         <span class="ds-event-title">${escapeHtml(ev.title)}</span>
-        <span class="ds-event-x">×</span>
+        <span class="ds-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
       </div>`).join('');
     return `
       <div class="ds-hour${isCurrent ? ' ds-hour-current' : ''}" data-action="ds-hour-click" data-hour="${pad(h)}:00">
@@ -687,10 +687,10 @@ function buildCalendarHTML() {
     const isSelected = dateStr === store.calendarSelectedDate;
     const evs        = byDate[dateStr] || [];
     const evHTML = evs.map(ev => `
-      <div class="cal-event" data-action="cal-delete-event" data-id="${ev.id}" title="${escapeHtml(ev.title)} (click to delete)">
+      <div class="cal-event" title="${escapeHtml(ev.title)}">
         ${ev.time ? `<span class="cal-event-time">${escapeHtml(ev.time)}</span>` : ''}
         <span class="cal-event-text">${escapeHtml(ev.title)}</span>
-        <span class="cal-event-x">×</span>
+        <span class="cal-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
       </div>`).join('');
     return `
       <div class="cal-day${isToday ? ' today' : ''}${isSelected ? ' selected' : ''}"
@@ -750,10 +750,10 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
     const evs     = byDate[dateStr] || [];
     const evHTML  = evs.length
       ? evs.map(ev => `
-          <div class="threeday-event" data-action="cal-delete-event" data-id="${ev.id}" title="${escapeHtml(ev.title)} · click to delete">
+          <div class="threeday-event" title="${escapeHtml(ev.title)}">
             ${ev.time ? `<span class="threeday-event-time">${escapeHtml(ev.time)}</span>` : ''}
             <span class="threeday-event-title">${escapeHtml(ev.title)}</span>
-            <span class="threeday-event-x">×</span>
+            <span class="threeday-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
           </div>`).join('')
       : `<span class="threeday-empty">No events</span>`;
     return `
