@@ -26,6 +26,14 @@ const DEFAULTS = {
       { id: 'scratchpad',  x: 8, y: 0, w: 4, h: 5 },
       { id: 'recentNotes', x: 0, y: 5, w: 12, h: 5 },
     ]
+  },
+  googleCalendar: {
+    connected: false,
+    accountEmail: '',
+    calendars: [],        // [{ id, summary, selected, syncToken }]
+    writeCalendarId: '',  // which calendar new Notely events push to
+    syncEnabled: true,
+    lastSyncAt: null
   }
 };
 
@@ -76,4 +84,8 @@ export function saveAdvisorSettings(advisor) {
     s.advisor = advisor;
     localStorage.setItem('notely-settings', JSON.stringify(s));
   } catch {}
+}
+
+export function defaultGoogleCalendarSettings() {
+  return JSON.parse(JSON.stringify(DEFAULTS.googleCalendar));
 }

@@ -173,10 +173,18 @@ function createSchema(db) {
   // Migration: add time column if upgrading from older schema
   try { db.exec(`ALTER TABLE events ADD COLUMN time TEXT`); } catch {}
 
+  // Migrations: Google Calendar sync tracking columns
+  try { db.exec(`ALTER TABLE events ADD COLUMN google_event_id TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE events ADD COLUMN google_calendar_id TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE events ADD COLUMN updated_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE events ADD COLUMN synced_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'local'`); } catch {}
+
   // Migration: add priority column to tasks if upgrading
   try { db.exec(`ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); } catch {}
 
   db.exec(`CREATE INDEX IF NOT EXISTS idx_events_date ON events(date ASC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_events_google_id ON events(google_event_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_notebook ON notes(notebook_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id)`);

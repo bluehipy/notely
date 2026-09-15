@@ -3,6 +3,7 @@
 import { store } from './store.js';
 import { db } from './db.js';
 import { saveSettings } from './settings.js';
+import { pushCreate as pushGoogleCreate, pushDelete as pushGoogleDelete } from './google-calendar.js';
 
 // Session-local API history (full provider-format messages including tool call/result pairs)
 let _apiHistory = [];
@@ -378,13 +379,17 @@ export async function executeTool(name, input) {
         const ev = await db.get('SELECT * FROM events WHERE id = ?', [res.lastInsertId]);
         store.events.push(ev);
         store.events.sort((a, b) => a.date.localeCompare(b.date) || (a.time||'').localeCompare(b.time||''));
+        pushGoogleCreate(ev);
         return { success: true, event: ev };
       }
 
-      case 'delete_event':
+      case 'delete_event': {
+        const ev = await db.get('SELECT * FROM events WHERE id = ?', [input.event_id]);
         await db.run('DELETE FROM events WHERE id = ?', [input.event_id]);
         store.events = store.events.filter(e => e.id !== input.event_id);
+        pushGoogleDelete(ev);
         return { success: true };
+      }
 
       case 'delete_note': {
         await db.run('DELETE FROM notes WHERE id = ?', [input.note_id]);

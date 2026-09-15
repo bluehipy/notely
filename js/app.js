@@ -5,6 +5,7 @@ import { store } from './store.js';
 import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderAdvisorView, renderSettingsView, showNotePanels, showConfirmDialog, showToast, refreshDashboardWidgets, escapeHtml } from './render.js';
 import { runAdvisor, clearAdvisorHistory, startNewConversation, loadConversation, getAllConversations, executeTool } from './advisor.js';
 import { saveSettings } from './settings.js';
+import { connect as connectGoogleCalendar, disconnect as disconnectGoogleCalendar, syncNow as syncGoogleCalendar, pushCreate as pushGoogleCreate, pushDelete as pushGoogleDelete, isActive as isGoogleSyncActive } from './google-calendar.js';
 import { initTheme, toggleTheme, applyAppearance } from './theme.js';
 import { initEditor, refreshAttachmentTray } from './editor.js';
 import { initShortcuts } from './shortcuts.js';
@@ -204,6 +205,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Restore route from URL hash (or default to all-notes view)
   await applyRoute();
+
+  // Google Calendar: pull latest on load, then keep polling while the tab stays open
+  // (sync only runs in this tab — the service worker can't reach the OPFS database).
+  if (isGoogleSyncActive()) {
+    syncGoogleCalendar().then(() => rerenderActiveView()).catch(err => console.warn('[google-calendar] initial sync failed:', err.message));
+  }
+  setInterval(() => {
+    if (isGoogleSyncActive()) {
+      syncGoogleCalendar().then(() => rerenderActiveView()).catch(err => console.warn('[google-calendar] periodic sync failed:', err.message));
+    }
+  }, 5 * 60 * 1000);
 
   // Reveal the app now that theme + layout are fully applied (prevents flicker)
   document.documentElement.classList.remove('app-loading');
@@ -694,6 +706,7 @@ async function handleDashboardClick(event) {
   } else if (action === 'cal-delete-event') {
     event.stopPropagation();
     const evId = parseInt(target.dataset.id);
+    const deletedEvent = store.events.find(e => e.id === evId);
     try {
       await showConfirmDialog(
         'Delete event?',
@@ -702,6 +715,7 @@ async function handleDashboardClick(event) {
           await db.run('DELETE FROM events WHERE id = ?', [evId]);
           store.events = store.events.filter(e => e.id !== evId);
           rerenderActiveView();
+          if (isGoogleSyncActive()) pushGoogleDelete(deletedEvent);
         }
       );
     } catch (error) {
@@ -955,6 +969,47 @@ async function handleSettingsClick(event) {
     handleThemeToggle();
   } else if (btn.dataset.action === 'clear-all-data') {
     await clearAllData();
+  } else if (btn.dataset.action === 'google-connect') {
+    btn.disabled = true;
+    try {
+      await connectGoogleCalendar();
+      showToast('Connected to Google Calendar.', 'success');
+      await syncGoogleCalendar();
+      rerenderActiveView();
+    } catch (error) {
+      console.error('Google Calendar connect failed:', error);
+      showToast('Could not connect to Google Calendar. Please try again.', 'error');
+    }
+    renderSettingsView();
+  } else if (btn.dataset.action === 'google-disconnect') {
+    btn.disabled = true;
+    try {
+      await disconnectGoogleCalendar();
+      showToast('Disconnected from Google Calendar.', 'success');
+      renderSidebar();
+    } catch (error) {
+      console.error('Google Calendar disconnect failed:', error);
+      showToast('Could not disconnect. Please try again.', 'error');
+    }
+    renderSettingsView();
+  } else if (btn.dataset.action === 'google-sync-now') {
+    btn.disabled = true;
+    try {
+      await syncGoogleCalendar();
+      rerenderActiveView();
+    } catch (error) {
+      console.error('Google Calendar sync failed:', error);
+      showToast('Sync failed. Please try again.', 'error');
+    }
+    renderSettingsView();
+  } else if (btn.dataset.action === 'toggle-google-calendar') {
+    const calId = btn.dataset.id;
+    const cal = store.settings.googleCalendar.calendars.find(c => c.id === calId);
+    if (cal) {
+      cal.selected = !cal.selected;
+      saveSettings(store.settings);
+      renderSettingsView();
+    }
   }
 }
 
@@ -1056,6 +1111,7 @@ async function addCalEvent(title) {
   );
   rerenderActiveView();
   setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
+  if (isGoogleSyncActive()) pushGoogleCreate(newEvent);
 }
 
 // Add a new task to the current list

@@ -965,6 +965,7 @@ export function renderSettingsView() {
   const s = store.settings;
   const d = s.dashboard;
   const w = d.widgets;
+  const gc = s.googleCalendar;
 
   const checkbox = (key, label, checked, disabled = false) => `
     <label class="settings-checkbox-row${disabled ? ' settings-row-disabled' : ''}">
@@ -1129,6 +1130,59 @@ export function renderSettingsView() {
             <span class="settings-row-hint">Max saved conversations (default 20)</span>
           </div>
         </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Google Calendar</div>
+        ${gc.connected ? `
+          <div class="settings-row">
+            <div class="settings-row-label">
+              <span>Connected${gc.accountEmail ? ` as ${escapeHtml(gc.accountEmail)}` : ''}</span>
+              <span class="settings-row-hint">${gc.lastSyncAt ? `Last synced ${new Date(gc.lastSyncAt).toLocaleString()}` : 'Not synced yet'}</span>
+            </div>
+            <div class="settings-row-control">
+              <button class="settings-link-btn" data-action="google-sync-now">Sync now</button>
+              <button class="settings-link-btn settings-link-btn-danger" data-action="google-disconnect">Disconnect</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-label">Calendars to show in Notely</div>
+            <div class="settings-row-control settings-checkbox-group">
+              ${gc.calendars.length ? gc.calendars.map(c => `
+                <label class="settings-checkbox-row">
+                  <input type="checkbox" data-action="toggle-google-calendar" data-id="${escapeHtml(c.id)}" ${c.selected ? 'checked' : ''} />
+                  <span>${escapeHtml(c.summary)}</span>
+                </label>`).join('') : '<span class="settings-row-hint">No calendars found</span>'}
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-label">Add new Notely events to</div>
+            <div class="settings-row-control">
+              <select class="settings-select" data-setting="googleCalendar.writeCalendarId">
+                ${gc.calendars.map(c => `<option value="${escapeHtml(c.id)}" ${gc.writeCalendarId === c.id ? 'selected' : ''}>${escapeHtml(c.summary)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-label">Sync enabled</div>
+            <div class="settings-row-control">
+              <label class="settings-checkbox-row">
+                <input type="checkbox" data-setting="googleCalendar.syncEnabled" ${gc.syncEnabled ? 'checked' : ''} />
+                <span>Keep syncing automatically</span>
+              </label>
+            </div>
+          </div>
+        ` : `
+          <div class="settings-row">
+            <div class="settings-row-label">
+              <span>Not connected</span>
+              <span class="settings-row-hint">Show Google Calendar events in Notely, and push events you add here back to Google.</span>
+            </div>
+            <div class="settings-row-control">
+              <button class="settings-upload-btn" data-action="google-connect">Connect Google Calendar</button>
+            </div>
+          </div>
+        `}
       </div>
 
       <div class="settings-card settings-card-danger">
