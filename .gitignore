@@ -3,10 +3,6 @@ sqlite-wasm/
 test-*.js
 package-lock.json
 
-# Vendored copies built from node_modules — regenerate, don't commit
-css/gridstack.min.css
-js/gridstack-all.js
-
 # Machine-local native-messaging registration (absolute path + locally-loaded
 # extension id) and its runtime log — neither is portable across machines
 native-host/com.notely.bridge.json
