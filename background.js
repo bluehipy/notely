@@ -33,11 +33,19 @@ async function sendToNotelyTab(tool, args) {
 
 let nativePort = null;
 
+// The native bridge is an optional, opt-in companion (Claude Desktop / MCP
+// integration) — most installs never have it registered. Not finding it is
+// the expected, common case, not an error: log at info level and don't spam
+// retries for a host that was never installed. A crash of an *already
+// connected* bridge is treated as transient and retried, since that can
+// recover on its own (e.g. the user restarts bridge.py).
+const NOT_INSTALLED = /not found|forbidden/i;
+
 function connectBridge() {
   try {
     nativePort = chrome.runtime.connectNative('com.notely.bridge');
   } catch (err) {
-    // Native host not installed — silently skip (extension still works standalone)
+    console.info('[notely-bridge] Native bridge unavailable — Notely works standalone:', err.message);
     return;
   }
 
@@ -50,16 +58,38 @@ function connectBridge() {
 
   nativePort.onDisconnect.addListener(() => {
     const err = chrome.runtime.lastError;
-    console.error('[notely-bridge] disconnected:', err ? err.message : 'no error');
+    const reason = err ? err.message : 'disconnected';
     nativePort = null;
-    setTimeout(connectBridge, 3_000);
+
+    console.info(`[notely-bridge] Native bridge unavailable (${reason}) — Notely works standalone.`);
+
+    // MV3 service workers get re-instantiated (and connectBridge() re-run
+    // from the top) on their own next wake-up, so a permanent "not
+    // installed" state doesn't need an internal retry loop at all.
+    if (!NOT_INSTALLED.test(reason)) {
+      setTimeout(connectBridge, 3_000);
+    }
   });
 }
 
 connectBridge();
 
-// Relay external tool calls (from javascript_tool / any https page) to the open Notely tab
-chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) => {
+// Relay external tool calls to the open Notely tab. Restricted to local pages
+// only (see externally_connectable in manifest.json) — this executes
+// data-mutating tools (delete_note, delete_event, ...) with no further
+// confirmation, so it must never be reachable from an arbitrary website.
+// The origin check here is defense-in-depth on top of the manifest pattern,
+// in case that pattern is ever loosened again without re-auditing this.
+const ALLOWED_EXTERNAL_ORIGINS = [/^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/];
+
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  const origin = sender.origin || '';
+  if (!ALLOWED_EXTERNAL_ORIGINS.some((re) => re.test(origin))) {
+    console.warn('[notely] Rejected external message from disallowed origin:', origin);
+    sendResponse({ error: 'Origin not allowed' });
+    return;
+  }
+
   const { tool, args } = message || {};
   if (!tool) { sendResponse({ error: 'Missing tool name' }); return; }
 
