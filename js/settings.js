@@ -6,13 +6,6 @@ const DEFAULTS = {
     accentColor: '',  // '' = use theme default
     bgImageSet: false // true when an image is stored in localStorage key notely-bg-image
   },
-  advisor: {
-    name: 'AI Advisor',
-    provider: 'auto',
-    apiKey: '',
-    systemPrompt: '',
-    historyMax: 20
-  },
   dashboard: {
     widgets: { recentNotes: true, calendar: true, events: true, scratchpad: true },
     recentNotesCount: 8,
@@ -30,10 +23,10 @@ const DEFAULTS = {
   googleCalendar: {
     connected: false,
     accountEmail: '',
-    calendars: [],        // [{ id, summary, selected, syncToken }]
-    writeCalendarId: '',  // which calendar new Notely events push to
+    calendars: [],        // [{ id, summary, selected }]
+    writeCalendarId: '',  // which calendar new Notely events are created in
     syncEnabled: true,
-    lastSyncAt: null
+    lastSyncAt: null       // last successful refresh from Google
   }
 };
 
@@ -67,6 +60,11 @@ export function loadSettings() {
     if (parsed.dashboard?.widgets?.tasks !== undefined) {
       delete parsed.dashboard.widgets.tasks;
     }
+    // Migrate: remove the retired AI Advisor feature (chat widget + API key)
+    if (parsed.advisor !== undefined) delete parsed.advisor;
+    if (Array.isArray(parsed.dashboard?.layout)) {
+      parsed.dashboard.layout = parsed.dashboard.layout.filter(l => l.id !== 'advisor');
+    }
     return deepMerge(base, parsed);
   } catch {
     return JSON.parse(JSON.stringify(DEFAULTS));
@@ -75,15 +73,6 @@ export function loadSettings() {
 
 export function saveSettings(s) {
   try { localStorage.setItem('notely-settings', JSON.stringify(s)); } catch {}
-}
-
-export function saveAdvisorSettings(advisor) {
-  try {
-    const raw = localStorage.getItem('notely-settings');
-    const s = raw ? JSON.parse(raw) : {};
-    s.advisor = advisor;
-    localStorage.setItem('notely-settings', JSON.stringify(s));
-  } catch {}
 }
 
 export function defaultGoogleCalendarSettings() {

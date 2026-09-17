@@ -3,18 +3,28 @@
 
 importScripts('./sqlite3.js');
 
+const DB_FILE = '/notely.db';
+
 let db = null;
+
+// Remove every entry at the OPFS root (this origin only ever stores notely.db + its
+// journal/wal sidecars there) — used for corruption recovery.
+async function wipeOpfsRoot() {
+  const root = await navigator.storage.getDirectory();
+  for await (const [name] of root.entries()) {
+    try { await root.removeEntry(name, { recursive: true }); } catch {}
+  }
+}
 
 // Initialize SQLite WASM with OPFS, with one self-healing retry on corruption
 sqlite3InitModule({
   locateFile: (filename) => `./${filename}`
 }).then(async (sqlite3) => {
   async function tryInit(wipeFirst) {
-    const pool = await sqlite3.installOpfsSAHPoolVfs({});
     if (wipeFirst) {
-      await pool.wipeFiles();
+      await wipeOpfsRoot();
     }
-    db = new sqlite3.oo1.OpfsDb('/notely.db');
+    db = new sqlite3.oo1.OpfsDb(DB_FILE);
     console.log('SQLite WASM initialized with OPFS');
     createSchema(db);
     self.postMessage({ type: 'ready' });
@@ -159,32 +169,13 @@ function createSchema(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at ASC)`);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_list ON tasks(list_id)`); } catch {}
 
-  // Events table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      date TEXT NOT NULL,
-      time TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  // Migration: add time column if upgrading from older schema
-  try { db.exec(`ALTER TABLE events ADD COLUMN time TEXT`); } catch {}
-
-  // Migrations: Google Calendar sync tracking columns
-  try { db.exec(`ALTER TABLE events ADD COLUMN google_event_id TEXT`); } catch {}
-  try { db.exec(`ALTER TABLE events ADD COLUMN google_calendar_id TEXT`); } catch {}
-  try { db.exec(`ALTER TABLE events ADD COLUMN updated_at TEXT`); } catch {}
-  try { db.exec(`ALTER TABLE events ADD COLUMN synced_at TEXT`); } catch {}
-  try { db.exec(`ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'local'`); } catch {}
+  // Events used to be mirrored locally; Google Calendar is now the only
+  // source of truth for them, so the local table is dropped.
+  db.exec(`DROP TABLE IF EXISTS events`);
 
   // Migration: add priority column to tasks if upgrading
   try { db.exec(`ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); } catch {}
 
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_events_date ON events(date ASC)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_events_google_id ON events(google_event_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_notebook ON notes(notebook_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag_id)`);

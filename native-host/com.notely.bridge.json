@@ -1,7 +1,0 @@
-{
-  "name": "com.notely.bridge",
-  "description": "Notely Native Messaging Bridge",
-  "path": "C:\\nexus\\projects\\notely\\code\\native-host\\bridge.bat",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://bmjjhmnnfhjanjabkalmlomgmnojbhch/"]
-}

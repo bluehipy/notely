@@ -2,8 +2,8 @@
 
 import { store } from './store.js';
 import { saveSettings } from './settings.js';
-import { getAllConversations, getCurrentConvId } from './advisor.js';
 import { applyAppearance } from './theme.js';
+import { EVENT_COLORS, RECURRENCE_PRESETS } from './google-calendar.js';
 
 let _grid = null; // active GridStack instance
 
@@ -90,10 +90,6 @@ export function renderSidebar() {
         <div class="sidebar-item ${store.currentView === 'calendar' ? 'selected' : ''}" data-action="select-calendar" title="Calendar">
           <i data-lucide="calendar"></i>
           <span class="sidebar-item-text">Calendar</span>
-        </div>
-        <div class="sidebar-item ${store.currentView === 'advisor' ? 'selected' : ''}" data-action="select-advisor" title="${escapeHtml(store.settings?.advisor?.name || 'AI Advisor')}">
-          <i data-lucide="bot"></i>
-          <span class="sidebar-item-text">${escapeHtml(store.settings?.advisor?.name || 'AI Advisor')}</span>
         </div>
       </div>
     </div>
@@ -318,7 +314,6 @@ function getWidgetLabel(id) {
     const list = store.taskLists.find(l => l.id === parseInt(id.slice(9)));
     return list?.name || 'Task List';
   }
-  if (id === 'advisor') return store.settings?.advisor?.name || 'AI Advisor';
   return WIDGET_LABELS[id] || id;
 }
 
@@ -329,7 +324,6 @@ function getWidgetIcon(id) {
     const list = store.taskLists.find(l => l.id === parseInt(id.slice(9)));
     return list?.type === 'priority' ? 'bell' : list?.type === 'quantity' ? 'shopping-cart' : 'check-square';
   }
-  if (id === 'advisor') return 'bot';
   return WIDGET_ICONS[id] || 'layout-dashboard';
 }
 
@@ -435,27 +429,6 @@ function buildTaskListWidgetContent(listId, ds) {
     </div>`;
 }
 
-function buildAdvisorWidgetContent() {
-  const msgs = store.advisorMessages.slice(-6); // last 6 messages
-  const msgHTML = msgs.length
-    ? msgs.map(m => `
-        <div class="adv-msg adv-msg-${m.role}${m.working ? ' adv-msg-working' : ''}">
-          <span class="adv-msg-text">${m.working ? escapeHtml(m.text) : renderMarkdown(m.text)}</span>
-        </div>`).join('')
-    : `<div class="adv-widget-empty">Ask me anything — I can manage your tasks, notes, and calendar.</div>`;
-  const isLoading = store.advisorLoading;
-  return `
-    <div class="adv-widget" id="adv-widget">
-      <div class="adv-widget-msgs" id="adv-widget-msgs">${msgHTML}${isLoading ? '<div class="adv-msg adv-msg-loading"><span class="adv-dots"><span>.</span><span>.</span><span>.</span></span></div>' : ''}</div>
-      <div class="adv-widget-input-row">
-        <input class="adv-widget-input" id="adv-widget-input" placeholder="Ask…" autocomplete="off" ${isLoading ? 'disabled' : ''} />
-        <button class="adv-widget-send" data-action="advisor-widget-send" ${isLoading ? 'disabled' : ''} title="Send">
-          <i data-lucide="send" width="13" height="13"></i>
-        </button>
-      </div>
-    </div>`;
-}
-
 function buildWidgetContent(id, ds) {
   if (id.startsWith('notebook-'))  return buildNotebookWidgetContent(parseInt(id.slice(9)));
   if (id.startsWith('note-'))      return buildNoteWidgetContent(parseInt(id.slice(5)));
@@ -466,7 +439,6 @@ function buildWidgetContent(id, ds) {
     case 'calendar':    return buildCalendarContent(ds);
     case 'events':      return buildEventsContent(ds);
     case 'scratchpad':  return `<textarea class="dash-scratchpad" id="scratchpad" placeholder="Quick notes…"></textarea>`;
-    case 'advisor':     return buildAdvisorWidgetContent();
     default: return '';
   }
 }
@@ -479,7 +451,7 @@ export function renderDashboard() {
   document.getElementById('note-list').hidden = true;
   document.getElementById('editor').hidden    = true;
   dashboardEl.hidden = false;
-  ['tasks-view','calendar-view','settings-view','advisor-view'].forEach(id =>
+  ['tasks-view','calendar-view','settings-view'].forEach(id =>
     document.getElementById(id)?.setAttribute('hidden',''));
   document.querySelector('.header')?.setAttribute('hidden', '');
 
@@ -504,7 +476,7 @@ export function renderDashboard() {
   const items = layout.filter(item => ds.widgets[item.id] !== false);
 
   const itemsHTML = items.map(item => {
-    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-') || item.id.startsWith('tasklist-') || item.id === 'advisor';
+    const isCustom = item.id.startsWith('notebook-') || item.id.startsWith('note-') || item.id.startsWith('tasklist-');
     const closeBtn = isCustom
       ? `<button class="dash-widget-close" data-action="remove-widget" data-widget-id="${item.id}" title="Remove widget"><i data-lucide="x" width="12" height="12"></i></button>`
       : '';
@@ -597,6 +569,15 @@ export function refreshDashboardWidgets(toolName) {
   });
 }
 
+function eventColorHex(colorId) {
+  return EVENT_COLORS.find(c => c.id === colorId)?.hex || null;
+}
+
+function eventChipStyle(ev) {
+  const hex = eventColorHex(ev.colorId);
+  return hex ? ` style="border-left:3px solid ${hex}"` : '';
+}
+
 function buildDayScheduleHTML(dateStr) {
   const pad = n => String(n).padStart(2, '0');
   const today = new Date();
@@ -621,8 +602,8 @@ function buildDayScheduleHTML(dateStr) {
         <span class="ds-allday-label">All day</span>
         <div class="ds-allday-events">
           ${allDayEvents.map(ev => `
-            <div class="ds-allday-event" title="${escapeHtml(ev.title)}">
-              ${escapeHtml(ev.title)} <span class="ds-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
+            <div class="ds-allday-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
+              ${escapeHtml(ev.title)} <span class="ds-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
             </div>`).join('')}
         </div>
        </div>`
@@ -638,10 +619,10 @@ function buildDayScheduleHTML(dateStr) {
       ? `<div class="ds-now-line" style="top:${(nowMin / 60) * 100}%"></div>`
       : '';
     const evHTML = evs.map(ev => `
-      <div class="ds-event" title="${escapeHtml(ev.title)}">
+      <div class="ds-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
         <span class="ds-event-time">${escapeHtml(ev.time)}</span>
         <span class="ds-event-title">${escapeHtml(ev.title)}</span>
-        <span class="ds-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
+        <span class="ds-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
       </div>`).join('');
     return `
       <div class="ds-hour${isCurrent ? ' ds-hour-current' : ''}" data-action="ds-hour-click" data-hour="${pad(h)}:00">
@@ -687,10 +668,10 @@ function buildCalendarHTML() {
     const isSelected = dateStr === store.calendarSelectedDate;
     const evs        = byDate[dateStr] || [];
     const evHTML = evs.map(ev => `
-      <div class="cal-event" title="${escapeHtml(ev.title)}">
+      <div class="cal-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
         ${ev.time ? `<span class="cal-event-time">${escapeHtml(ev.time)}</span>` : ''}
         <span class="cal-event-text">${escapeHtml(ev.title)}</span>
-        <span class="cal-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
+        <span class="cal-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
       </div>`).join('');
     return `
       <div class="cal-day${isToday ? ' today' : ''}${isSelected ? ' selected' : ''}"
@@ -707,9 +688,7 @@ function buildCalendarHTML() {
     addBar = `
       <div class="cal-add-bar">
         <span class="cal-add-label">${label}</span>
-        <input class="cal-event-input" id="cal-event-input" placeholder="Event title…" maxlength="100" autocomplete="off" />
-        <input class="cal-time-input" id="cal-event-time" type="time" title="Start time (optional)" />
-        <button class="cal-add-btn" data-action="cal-add-event" title="Add"><i data-lucide="plus"></i></button>
+        <button class="cal-new-event-btn" data-action="cal-new-event"><i data-lucide="plus"></i> New event</button>
       </div>`;
   }
 
@@ -750,10 +729,10 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
     const evs     = byDate[dateStr] || [];
     const evHTML  = evs.length
       ? evs.map(ev => `
-          <div class="threeday-event" title="${escapeHtml(ev.title)}">
+          <div class="threeday-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
             ${ev.time ? `<span class="threeday-event-time">${escapeHtml(ev.time)}</span>` : ''}
             <span class="threeday-event-title">${escapeHtml(ev.title)}</span>
-            <span class="threeday-event-x" data-action="cal-delete-event" data-id="${ev.id}" title="Delete event">×</span>
+            <span class="threeday-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
           </div>`).join('')
       : `<span class="threeday-empty">No events</span>`;
     return `
@@ -781,7 +760,6 @@ export function showNotePanels() {
   document.getElementById('tasks-view')?.setAttribute('hidden', '');
   document.getElementById('calendar-view')?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
-  document.getElementById('advisor-view')?.setAttribute('hidden', '');
   const noteListEl = document.getElementById('note-list');
   const editorEl   = document.getElementById('editor');
   if (noteListEl) noteListEl.hidden = false;
@@ -803,7 +781,6 @@ export function renderTasksView() {
   dashboardEl?.setAttribute('hidden', '');
   calendarEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
-  document.getElementById('advisor-view')?.setAttribute('hidden', '');
   tasksEl.hidden = false;
   document.querySelector('.search-input-wrapper')?.setAttribute('hidden', '');
   document.getElementById('header-contextual')?.setAttribute('hidden', '');
@@ -910,7 +887,6 @@ export function renderCalendarView() {
   dashboardEl?.setAttribute('hidden', '');
   tasksEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
-  document.getElementById('advisor-view')?.setAttribute('hidden', '');
   calendarEl.hidden = false;
   document.querySelector('.search-input-wrapper')?.setAttribute('hidden', '');
   document.getElementById('header-contextual')?.setAttribute('hidden', '');
@@ -920,11 +896,22 @@ export function renderCalendarView() {
   const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
   const scheduleDate = store.calendarSelectedDate || todayStr;
 
+  const gc = store.settings.googleCalendar;
+  let statusBanner = '';
+  if (!gc.connected) {
+    statusBanner = `<div class="cal-status-banner">Connect Google Calendar in Settings to see and add events.</div>`;
+  } else if (store.eventsError) {
+    statusBanner = `<div class="cal-status-banner cal-status-error">Couldn't load events. <button class="settings-link-btn" data-action="cal-refresh">Retry</button></div>`;
+  } else if (store.eventsLoading) {
+    statusBanner = `<div class="cal-status-banner">Loading events…</div>`;
+  }
+
   calendarEl.innerHTML = `
     <div class="feature-view-layout">
       <div class="feature-view-header">
         <div class="feature-view-title">Calendar</div>
       </div>
+      ${statusBanner}
       <div class="calendar-view-body">
         <div class="calendar-view-left">
           ${buildCalendarHTML()}
@@ -947,7 +934,6 @@ export function renderCalendarView() {
       const hoursEl = document.getElementById('ds-hours-scroll');
       if (hoursEl) hoursEl.scrollTop = 48 * 8;
     }
-    document.getElementById('cal-event-input')?.focus();
   }, 0);
 }
 
@@ -956,7 +942,7 @@ export function renderSettingsView() {
   const el = document.getElementById('settings-view');
   if (!el) return;
 
-  ['note-list','editor','dashboard','tasks-view','calendar-view','advisor-view'].forEach(id =>
+  ['note-list','editor','dashboard','tasks-view','calendar-view'].forEach(id =>
     document.getElementById(id)?.setAttribute('hidden', '')
   );
   el.hidden = false;
@@ -1088,60 +1074,15 @@ export function renderSettingsView() {
       </div>
 
       <div class="settings-card">
-        <div class="settings-card-title">AI Advisor</div>
-        <div class="settings-row">
-          <div class="settings-row-label">Name</div>
-          <div class="settings-row-control">
-            <input type="text" class="settings-text-input" id="advisor-name-input"
-              value="${escapeHtml(s.advisor?.name || 'AI Advisor')}" placeholder="AI Advisor" maxlength="40" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row-label">Provider</div>
-          <div class="settings-row-control">
-            <select class="settings-select" id="advisor-provider-input">
-              <option value="auto"      ${(s.advisor?.provider||'auto') === 'auto'      ? 'selected' : ''}>Auto-detect from key</option>
-              <option value="anthropic" ${s.advisor?.provider === 'anthropic' ? 'selected' : ''}>Anthropic (Claude Haiku)</option>
-              <option value="openai"    ${s.advisor?.provider === 'openai'    ? 'selected' : ''}>OpenAI (GPT-4o mini)</option>
-              <option value="gemini"    ${s.advisor?.provider === 'gemini'    ? 'selected' : ''}>Google Gemini 3.6 Flash</option>
-            </select>
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row-label">API Key</div>
-          <div class="settings-row-control">
-            <input type="password" class="settings-text-input" id="advisor-key-input"
-              value="${escapeHtml(s.advisor?.apiKey || '')}" placeholder="sk-ant-… / sk-… / AIza…" autocomplete="off" />
-            <span class="settings-row-hint">Stored locally in your browser only — never sent anywhere else</span>
-          </div>
-        </div>
-        <div class="settings-row settings-row-tall">
-          <div class="settings-row-label">Your context</div>
-          <div class="settings-row-control">
-            <textarea class="settings-textarea" id="advisor-prompt-input"
-              placeholder="Tell the advisor about yourself: your goals, preferences, what you use Notely for…" rows="5">${escapeHtml(s.advisor?.systemPrompt || '')}</textarea>
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row-label">History limit</div>
-          <div class="settings-row-control">
-            <input type="number" class="settings-text-input" id="advisor-history-input"
-              value="${s.advisor?.historyMax ?? 20}" min="1" max="100" style="width:80px" />
-            <span class="settings-row-hint">Max saved conversations (default 20)</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-card">
         <div class="settings-card-title">Google Calendar</div>
         ${gc.connected ? `
           <div class="settings-row">
             <div class="settings-row-label">
               <span>Connected${gc.accountEmail ? ` as ${escapeHtml(gc.accountEmail)}` : ''}</span>
-              <span class="settings-row-hint">${gc.lastSyncAt ? `Last synced ${new Date(gc.lastSyncAt).toLocaleString()}` : 'Not synced yet'}</span>
+              <span class="settings-row-hint">${gc.lastSyncAt ? `Last refreshed ${new Date(gc.lastSyncAt).toLocaleString()}` : 'Not refreshed yet'}</span>
             </div>
             <div class="settings-row-control">
-              <button class="settings-link-btn" data-action="google-sync-now">Sync now</button>
+              <button class="settings-link-btn" data-action="google-refresh">Refresh</button>
               <button class="settings-link-btn settings-link-btn-danger" data-action="google-disconnect">Disconnect</button>
             </div>
           </div>
@@ -1156,27 +1097,18 @@ export function renderSettingsView() {
             </div>
           </div>
           <div class="settings-row">
-            <div class="settings-row-label">Add new Notely events to</div>
+            <div class="settings-row-label">Add new events to</div>
             <div class="settings-row-control">
               <select class="settings-select" data-setting="googleCalendar.writeCalendarId">
                 ${gc.calendars.map(c => `<option value="${escapeHtml(c.id)}" ${gc.writeCalendarId === c.id ? 'selected' : ''}>${escapeHtml(c.summary)}</option>`).join('')}
               </select>
             </div>
           </div>
-          <div class="settings-row">
-            <div class="settings-row-label">Sync enabled</div>
-            <div class="settings-row-control">
-              <label class="settings-checkbox-row">
-                <input type="checkbox" data-setting="googleCalendar.syncEnabled" ${gc.syncEnabled ? 'checked' : ''} />
-                <span>Keep syncing automatically</span>
-              </label>
-            </div>
-          </div>
         ` : `
           <div class="settings-row">
             <div class="settings-row-label">
               <span>Not connected</span>
-              <span class="settings-row-hint">Show Google Calendar events in Notely, and push events you add here back to Google.</span>
+              <span class="settings-row-hint">Notely's calendar reads and writes events directly on your selected Google Calendar — connect an account to use it.</span>
             </div>
             <div class="settings-row-control">
               <button class="settings-upload-btn" data-action="google-connect">Connect Google Calendar</button>
@@ -1185,12 +1117,39 @@ export function renderSettingsView() {
         `}
       </div>
 
+      <div class="settings-card">
+        <div class="settings-card-title">Backup</div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <span>Export data</span>
+            <span class="settings-row-hint">Download all notes, notebooks, tasks, and task lists as a single backup file. (Calendar events live in Google Calendar and aren't included.)</span>
+          </div>
+          <div class="settings-row-control">
+            <button class="settings-upload-btn" data-action="export-data">
+              <i data-lucide="download" width="13" height="13"></i> Export data
+            </button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">
+            <span>Import data</span>
+            <span class="settings-row-hint">Restore from a backup file. This replaces everything currently in Notely.</span>
+          </div>
+          <div class="settings-row-control">
+            <button class="settings-upload-btn" data-action="import-data-pick">
+              <i data-lucide="upload" width="13" height="13"></i> Import data
+            </button>
+            <input type="file" id="import-data-input" accept=".json,application/json" style="display:none">
+          </div>
+        </div>
+      </div>
+
       <div class="settings-card settings-card-danger">
         <div class="settings-card-title">Danger Zone</div>
         <div class="settings-row">
           <div class="settings-row-label">
             <span>Clear all data</span>
-            <span class="settings-row-hint">Permanently deletes all notes, notebooks, tasks, task lists, and events. Settings are kept.</span>
+            <span class="settings-row-hint">Permanently deletes all notes, notebooks, tasks, and task lists. Settings are kept. (Google Calendar events are not affected.)</span>
           </div>
           <div class="settings-row-control">
             <button class="btn btn-danger" data-action="clear-all-data">Clear all data</button>
@@ -1285,154 +1244,6 @@ export function renderSettingsView() {
 
   attachUploadHandlers();
   document.getElementById('appearance-img-remove')?.addEventListener('click', removeImage);
-
-  // Wire advisor settings inputs (save on blur/change)
-  function saveAdvisorField(field, value) {
-    if (!s.advisor) s.advisor = {};
-    s.advisor[field] = value;
-    // Keep store.settings in sync so the advisor view reads the live value
-    if (!store.settings.advisor) store.settings.advisor = {};
-    store.settings.advisor[field] = value;
-    try { localStorage.setItem('notely-settings', JSON.stringify(s)); } catch {}
-    // Update sidebar label live
-    document.querySelectorAll('[data-action="select-advisor"] .sidebar-item-text')
-      .forEach(el => { el.textContent = s.advisor.name || 'AI Advisor'; });
-  }
-  document.getElementById('advisor-name-input')
-    ?.addEventListener('change', e => saveAdvisorField('name', e.target.value.trim() || 'AI Advisor'));
-  document.getElementById('advisor-provider-input')
-    ?.addEventListener('change', e => saveAdvisorField('provider', e.target.value));
-  document.getElementById('advisor-key-input')
-    ?.addEventListener('change', e => saveAdvisorField('apiKey', e.target.value.trim()));
-  document.getElementById('advisor-key-input')
-    ?.addEventListener('blur', e => saveAdvisorField('apiKey', e.target.value.trim()));
-  document.getElementById('advisor-prompt-input')
-    ?.addEventListener('change', e => saveAdvisorField('systemPrompt', e.target.value));
-  document.getElementById('advisor-history-input')
-    ?.addEventListener('change', e => saveAdvisorField('historyMax', Math.max(1, parseInt(e.target.value) || 20)));
-}
-
-// Simple markdown → HTML renderer (safe, no external deps)
-function renderMarkdown(text) {
-  if (!text) return '';
-  // Escape HTML first
-  let html = text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // Bold and italic
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Code spans
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bullet lists: convert consecutive "- " lines into <ul>
-  html = html.replace(/((?:^|\n)- .+)+/g, match => {
-    const items = match.trim().split('\n').map(l => `<li>${l.replace(/^- /, '')}</li>`).join('');
-    return `<ul>${items}</ul>`;
-  });
-  // Line breaks
-  html = html.replace(/\n/g, '<br>');
-  return html;
-}
-
-// Render AI Advisor full view
-export function renderAdvisorView() {
-  const el = document.getElementById('advisor-view');
-  if (!el) return;
-
-  ['note-list','editor','dashboard','tasks-view','calendar-view','settings-view'].forEach(id =>
-    document.getElementById(id)?.setAttribute('hidden', ''));
-  el.hidden = false;
-  restoreHeaderSearch();
-
-  const name = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
-  const hasKey = !!(store.settings?.advisor?.apiKey);
-  const currentId = getCurrentConvId();
-  const allConvs = getAllConversations();
-
-  // Conversation history sidebar
-  const convItems = allConvs.map(c => {
-    const isActive = c.id === currentId && store.advisorMessages.length > 0;
-    const title = escapeHtml(c.title || 'Conversation');
-    const d = new Date(c.updatedAt || c.createdAt);
-    const now = new Date();
-    const sameDay = d.toDateString() === now.toDateString();
-    const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
-    const dateLabel = sameDay ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : d.toDateString() === yesterday.toDateString() ? 'Yesterday'
-      : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    return `<div class="adv-conv-item${isActive ? ' adv-conv-active' : ''}"
-                 data-action="advisor-load-conv" data-conv-id="${escapeHtml(c.id)}">
-              <div class="adv-conv-title">${title}</div>
-              <div class="adv-conv-date">${dateLabel}</div>
-            </div>`;
-  }).join('');
-
-  const messagesHTML = store.advisorMessages.length
-    ? store.advisorMessages.map(m => `
-        <div class="adv-msg adv-msg-${m.role}${m.working ? ' adv-msg-working' : ''}">
-          ${m.role === 'assistant' && !m.working
-            ? `<div class="adv-msg-avatar"><i data-lucide="bot" width="14" height="14"></i></div>`
-            : ''}
-          <div class="adv-msg-bubble">${m.working ? escapeHtml(m.text) : renderMarkdown(m.text)}</div>
-        </div>`).join('')
-    : `<div class="adv-empty">
-        <i data-lucide="bot" style="width:32px;height:32px;color:var(--color-primary);margin-bottom:12px"></i>
-        <div class="adv-empty-title">${name}</div>
-        <div class="adv-empty-sub">${hasKey ? 'Ask me anything — I can create tasks, add events, and search your notes.' : 'Add your API key in Settings to get started.'}</div>
-      </div>`;
-
-  el.innerHTML = `
-    <div class="advisor-layout">
-      <div class="adv-sidebar">
-        <button class="adv-new-btn" data-action="advisor-new-conv">
-          <i data-lucide="plus" width="14" height="14"></i> New chat
-        </button>
-        <div class="adv-conv-list">
-          ${convItems || '<div class="adv-conv-empty">No past conversations</div>'}
-        </div>
-      </div>
-      <div class="adv-main">
-        <div class="feature-view-header">
-          <div class="feature-view-title">${name}</div>
-        </div>
-        <div class="adv-chat">
-          <div class="adv-messages" id="adv-messages">
-            ${messagesHTML}
-            ${store.advisorLoading ? '<div class="adv-msg adv-msg-assistant"><div class="adv-msg-avatar"><i data-lucide="bot" width="14" height="14"></i></div><div class="adv-msg-bubble adv-msg-thinking"><span class="adv-dots"><span>.</span><span>.</span><span>.</span></span></div></div>' : ''}
-          </div>
-          <div class="adv-input-row">
-            <textarea class="adv-input" id="adv-input" rows="1"
-              placeholder="${hasKey ? 'Ask anything…' : 'Configure API key in Settings first'}"
-              ${hasKey ? '' : 'disabled'}
-              autocomplete="off"></textarea>
-            <button class="adv-send-btn" data-action="advisor-send"
-              ${hasKey && !store.advisorLoading ? '' : 'disabled'}
-              title="Send (Enter)">
-              <i data-lucide="send" width="16" height="16"></i>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>`;
-
-  if (window.lucide) window.lucide.createIcons();
-
-  const msgsEl = document.getElementById('adv-messages');
-  if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
-
-  const input = document.getElementById('adv-input');
-  if (input) {
-    input.addEventListener('input', () => {
-      input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-    });
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        document.querySelector('[data-action="advisor-send"]')?.click();
-      }
-    });
-    if (!store.advisorLoading) input.focus();
-  }
 }
 
 // Render Note List
@@ -1855,6 +1666,194 @@ export function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function addOneHourClock(time) {
+  const [h, m] = time.split(':').map(Number);
+  const total = (h * 60 + m + 60) % (24 * 60);
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
+function colorSwatchesHTML(selectedId) {
+  const swatch = (id, hex, title, selected) => `
+    <button type="button" class="event-color-swatch${selected ? ' selected' : ''}" data-color-id="${id}" title="${escapeHtml(title)}" style="background:${hex}">
+      ${selected ? '<i data-lucide="check" width="12" height="12"></i>' : ''}
+    </button>`;
+  const defaultHex = 'var(--color-border-muted)';
+  return swatch('', defaultHex, 'Default', !selectedId)
+    + EVENT_COLORS.map(c => swatch(c.id, c.hex, c.name, selectedId === c.id)).join('');
+}
+
+function recurrenceOptionsHTML(selected) {
+  return RECURRENCE_PRESETS.map(p =>
+    `<option value="${p.key}" ${selected === p.key ? 'selected' : ''}>${escapeHtml(p.label)}</option>`
+  ).join('');
+}
+
+/**
+ * Show the create/edit event modal.
+ * @param {{mode: 'create'|'edit', event?: object, dateStr?: string, startTime?: string}} opts
+ * @returns {Promise<null | {action:'delete', scope} | {action:'save', scope, data, originalDate}>}
+ */
+export function showEventModal({ mode, event = null, dateStr = null, startTime = null }) {
+  return new Promise((resolve) => {
+    const container = document.getElementById('dialog-container');
+    if (!container) { resolve(null); return; }
+
+    const isEdit = mode === 'edit';
+    const isRecurring = !!(event && event.recurringEventId);
+
+    const original = isEdit ? {
+      title: event.title || '',
+      description: event.description || '',
+      allDay: event.allDay,
+      date: event.date,
+      time: event.time || '09:00',
+      endDate: event.endDate || event.date,
+      endTime: event.endTime || addOneHourClock(event.time || '09:00'),
+      colorId: event.colorId || '',
+      recurrence: event.recurrencePreset || 'none'
+    } : {
+      title: '', description: '', allDay: false,
+      date: dateStr, time: startTime || '09:00',
+      endDate: dateStr, endTime: addOneHourClock(startTime || '09:00'),
+      colorId: '', recurrence: 'none'
+    };
+
+    const html = `
+      <div class="dialog-overlay">
+        <div class="event-modal">
+          <div class="confirm-dialog-title">${isEdit ? 'Edit event' : 'New event'}</div>
+
+          <input type="text" class="event-modal-input" id="ev-title" placeholder="Event title" maxlength="200" value="${escapeHtml(original.title)}" />
+
+          <label class="event-modal-checkbox-row">
+            <input type="checkbox" id="ev-allday" ${original.allDay ? 'checked' : ''} />
+            <span>All day</span>
+          </label>
+
+          <div class="event-modal-row">
+            <label class="event-modal-row-label">Starts</label>
+            <input type="date" class="event-modal-date" id="ev-start-date" value="${original.date}" />
+            <input type="time" class="event-modal-time" id="ev-start-time" value="${original.time}" ${original.allDay ? 'disabled' : ''} />
+          </div>
+          <div class="event-modal-row">
+            <label class="event-modal-row-label">Ends</label>
+            <input type="date" class="event-modal-date" id="ev-end-date" value="${original.endDate}" />
+            <input type="time" class="event-modal-time" id="ev-end-time" value="${original.endTime}" ${original.allDay ? 'disabled' : ''} />
+          </div>
+
+          ${isRecurring ? `
+          <div class="event-modal-row">
+            <label class="event-modal-row-label">Applies to</label>
+            <select class="settings-select" id="ev-scope">
+              <option value="this">This event</option>
+              <option value="all">All events in the series</option>
+            </select>
+          </div>` : ''}
+
+          <div class="event-modal-row">
+            <label class="event-modal-row-label">Repeats</label>
+            <select class="settings-select" id="ev-recurrence" ${isRecurring ? 'disabled' : ''}>
+              ${recurrenceOptionsHTML(original.recurrence)}
+            </select>
+          </div>
+
+          <div class="event-modal-row">
+            <label class="event-modal-row-label">Color</label>
+            <div class="event-color-swatches" id="ev-colors">${colorSwatchesHTML(original.colorId)}</div>
+          </div>
+
+          <textarea class="event-modal-textarea" id="ev-description" placeholder="Description (optional)" rows="3">${escapeHtml(original.description)}</textarea>
+
+          <div class="confirm-dialog-buttons event-modal-buttons">
+            ${isEdit ? '<button type="button" class="confirm-dialog-button danger" id="ev-delete">Delete</button>' : ''}
+            <span class="event-modal-buttons-spacer"></span>
+            <button type="button" class="confirm-dialog-button cancel" id="ev-cancel">Cancel</button>
+            <button type="button" class="confirm-dialog-button primary" id="ev-save">Save</button>
+          </div>
+        </div>
+      </div>`;
+
+    container.innerHTML = html;
+    if (window.lucide) window.lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
+
+    let selectedColorId = original.colorId;
+
+    const alldayEl    = container.querySelector('#ev-allday');
+    const startTimeEl = container.querySelector('#ev-start-time');
+    const endTimeEl   = container.querySelector('#ev-end-time');
+    const scopeEl     = container.querySelector('#ev-scope');
+    const recurrenceEl = container.querySelector('#ev-recurrence');
+
+    alldayEl.addEventListener('change', () => {
+      startTimeEl.disabled = alldayEl.checked;
+      endTimeEl.disabled = alldayEl.checked;
+    });
+
+    // Recurrence is a series-level property — only editable when the change
+    // is being applied to the whole series (or the event isn't part of one).
+    scopeEl?.addEventListener('change', () => {
+      recurrenceEl.disabled = scopeEl.value !== 'all';
+    });
+
+    container.querySelectorAll('.event-color-swatch').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedColorId = btn.dataset.colorId || null;
+        container.querySelectorAll('.event-color-swatch').forEach(b => {
+          const isSel = b === btn;
+          b.classList.toggle('selected', isSel);
+          b.innerHTML = isSel ? '<i data-lucide="check" width="12" height="12"></i>' : '';
+        });
+        if (window.lucide) window.lucide.createIcons({ nodes: Array.from(container.querySelectorAll('[data-lucide]')) });
+      });
+    });
+
+    const close = (result) => { container.innerHTML = ''; resolve(result); };
+
+    container.querySelector('#ev-cancel').addEventListener('click', () => close(null));
+    container.querySelector('.dialog-overlay').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) close(null);
+    });
+
+    container.querySelector('#ev-delete')?.addEventListener('click', () => {
+      close({ action: 'delete', scope: scopeEl?.value || 'this' });
+    });
+
+    container.querySelector('#ev-save').addEventListener('click', () => {
+      const titleEl = container.querySelector('#ev-title');
+      const title = titleEl.value.trim();
+      if (!title) { titleEl.focus(); return; }
+
+      const allDay = alldayEl.checked;
+      const date = container.querySelector('#ev-start-date').value || original.date;
+      let endDate = container.querySelector('#ev-end-date').value || date;
+      if (endDate < date) endDate = date;
+      const time = container.querySelector('#ev-start-time').value || '09:00';
+      const endTime = container.querySelector('#ev-end-time').value || addOneHourClock(time);
+      const scope = scopeEl?.value || 'this';
+
+      close({
+        action: 'save',
+        scope,
+        originalDate: isEdit ? event.date : null,
+        data: {
+          title,
+          description: container.querySelector('#ev-description').value,
+          allDay,
+          date, endDate,
+          time: allDay ? null : time,
+          endTime: allDay ? null : endTime,
+          colorId: selectedColorId || null,
+          recurrence: recurrenceEl.value,
+          timeZone: isEdit ? (event.timeZone || undefined) : undefined
+        }
+      });
+    });
+
+    setTimeout(() => container.querySelector('#ev-title')?.focus(), 50);
+  });
 }
 
 /**

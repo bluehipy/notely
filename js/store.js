@@ -9,7 +9,9 @@ export const store = {
   tags: [],
   taskLists: [],
   tasks: [],
-  events: [],
+  events: [],          // session-only cache of events fetched from Google Calendar
+  eventsLoading: false,
+  eventsError: null,
 
   // Calendar navigation state
   calendarYear: new Date().getFullYear(),
@@ -29,11 +31,7 @@ export const store = {
   renamingNotebookId: null,
   renamingTaskListId: null,
 
-  // AI Advisor chat state (session-only, resets on reload)
-  advisorMessages: [],
-  advisorLoading: false,
-
-  // Active view: 'notes' | 'dashboard' | 'tasks' | 'calendar' | 'advisor' | 'settings'
+  // Active view: 'notes' | 'dashboard' | 'tasks' | 'calendar' | 'settings'
   currentView: 'notes',
 
   // User settings (persisted to localStorage)

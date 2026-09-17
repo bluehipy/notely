@@ -174,7 +174,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['widget_id'],
-      properties: { widget_id: { type: 'string', description: 'From list_available_widgets. Fixed: calendar | events | scratchpad | recentNotes | advisor. Dynamic: tasklist-{id} | notebook-{id} | note-{id}' } }
+      properties: { widget_id: { type: 'string', description: 'From list_available_widgets. Fixed: calendar | events | scratchpad | recentNotes. Dynamic: tasklist-{id} | notebook-{id} | note-{id}' } }
     }
   },
   {
@@ -219,7 +219,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['event_id'],
-      properties: { event_id: { type: 'integer', description: 'id from list_events' } }
+      properties: { event_id: { type: 'string', description: 'id from list_events (a Google Calendar event id)' } }
     }
   }
 ];

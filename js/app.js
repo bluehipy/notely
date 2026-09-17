@@ -2,10 +2,10 @@
 
 import { db, waitForReady } from './db.js';
 import { store } from './store.js';
-import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderAdvisorView, renderSettingsView, showNotePanels, showConfirmDialog, showToast, refreshDashboardWidgets, escapeHtml } from './render.js';
-import { runAdvisor, clearAdvisorHistory, startNewConversation, loadConversation, getAllConversations, executeTool } from './advisor.js';
+import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderSettingsView, showNotePanels, showConfirmDialog, showEventModal, showToast, refreshDashboardWidgets, escapeHtml } from './render.js';
+import { executeTool } from './advisor.js';
 import { saveSettings } from './settings.js';
-import { connect as connectGoogleCalendar, disconnect as disconnectGoogleCalendar, syncNow as syncGoogleCalendar, pushCreate as pushGoogleCreate, pushDelete as pushGoogleDelete, isActive as isGoogleSyncActive } from './google-calendar.js';
+import { connect as connectGoogleCalendar, disconnect as disconnectGoogleCalendar, refreshEvents, createEvent as createGoogleEvent, updateEvent as updateGoogleEvent, deleteEvent as deleteGoogleEvent, getEvent as getGoogleEvent, isActive as isGoogleSyncActive } from './google-calendar.js';
 import { initTheme, toggleTheme, applyAppearance } from './theme.js';
 import { initEditor, refreshAttachmentTray } from './editor.js';
 import { initShortcuts } from './shortcuts.js';
@@ -32,7 +32,6 @@ function parseRoute() {
   if (hash === 'tasks') return { view: 'tasks-redirect' };
   if (hash === 'dashboard') return { view: 'dashboard' };
   if (hash === 'calendar')  return { view: 'calendar' };
-  if (hash === 'advisor')   return { view: 'advisor' };
   if (hash === 'settings')  return { view: 'settings' };
   const [section, id] = hash.split('/');
   if (section === 'tasklist' && id) return { view: 'tasklist', id: parseInt(id) };
@@ -86,14 +85,7 @@ async function applyRoute() {
     store.currentNote = null;
     renderSidebar();
     renderCalendarView();
-
-  } else if (route.view === 'advisor') {
-    store.currentView = 'advisor';
-    store.currentNotebook = null;
-    store.currentTag = null;
-    store.currentNote = null;
-    renderSidebar();
-    renderAdvisorView();
+    loadCalendarEvents(true);
 
   } else if (route.view === 'settings') {
     store.currentView = 'settings';
@@ -180,9 +172,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Fetch tasks (loaded per-list on route; start empty)
     store.tasks = [];
-
-    // Fetch events
-    store.events = await db.all('SELECT * FROM events ORDER BY date ASC, time ASC, id ASC');
     console.log('Tasks loaded:', store.tasks.length);
 
     // Fetch tags with counts
@@ -206,16 +195,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Restore route from URL hash (or default to all-notes view)
   await applyRoute();
 
-  // Google Calendar: pull latest on load, then keep polling while the tab stays open
-  // (sync only runs in this tab — the service worker can't reach the OPFS database).
-  if (isGoogleSyncActive()) {
-    syncGoogleCalendar().then(() => rerenderActiveView()).catch(err => console.warn('[google-calendar] initial sync failed:', err.message));
-  }
-  setInterval(() => {
-    if (isGoogleSyncActive()) {
-      syncGoogleCalendar().then(() => rerenderActiveView()).catch(err => console.warn('[google-calendar] periodic sync failed:', err.message));
-    }
-  }, 5 * 60 * 1000);
+  // Google Calendar is the only source of event data — fetch on load, then
+  // keep refreshing while the tab stays open so events created elsewhere
+  // (another device, Google Calendar itself) show up here too.
+  loadCalendarEvents(false);
+  setInterval(() => loadCalendarEvents(true), 5 * 60 * 1000);
 
   // Reveal the app now that theme + layout are fully applied (prevents flicker)
   document.documentElement.classList.remove('app-loading');
@@ -279,10 +263,6 @@ function setupEventListeners() {
   // Calendar view event delegation
   document.getElementById('calendar-view')?.addEventListener('click', handleDashboardClick);
   document.getElementById('calendar-view')?.addEventListener('keydown', handleDashboardKeydown);
-
-  // Advisor view event delegation
-  document.getElementById('advisor-view')?.addEventListener('click', handleDashboardClick);
-  document.getElementById('advisor-view')?.addEventListener('keydown', handleDashboardKeydown);
 
   // Header contextual slot (legacy; add-widget FAB is now on document.body)
   document.getElementById('header-contextual')?.addEventListener('click', handleDashboardClick);
@@ -442,15 +422,7 @@ async function handleSidebarClick(event) {
     }
     renderSidebar();
     renderCalendarView();
-
-  } else if (action === 'select-advisor') {
-    setRoute('advisor');
-    store.currentView = 'advisor';
-    store.currentNotebook = null;
-    store.currentTag = null;
-    store.currentNote = null;
-    renderSidebar();
-    renderAdvisorView();
+    loadCalendarEvents(true);
 
   } else if (action === 'select-settings') {
     setRoute('settings');
@@ -673,49 +645,58 @@ async function handleDashboardClick(event) {
     if (store.calendarMonth < 0) { store.calendarMonth = 11; store.calendarYear--; }
     store.calendarSelectedDate = null;
     rerenderActiveView();
+    loadCalendarEvents(true);
 
   } else if (action === 'cal-next') {
     store.calendarMonth++;
     if (store.calendarMonth > 11) { store.calendarMonth = 0; store.calendarYear++; }
     store.calendarSelectedDate = null;
     rerenderActiveView();
+    loadCalendarEvents(true);
 
   } else if (action === 'cal-day-click') {
     const date = target.closest('[data-date]')?.dataset.date;
     if (date) {
       store.calendarSelectedDate = store.calendarSelectedDate === date ? null : date;
       rerenderActiveView();
-      if (store.calendarSelectedDate) {
-        setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
-      }
     }
 
   } else if (action === 'ds-hour-click') {
     const hour = target.closest('[data-hour]')?.dataset.hour;
-    if (hour) {
-      const timeInput = document.getElementById('cal-event-time');
-      if (timeInput) timeInput.value = hour;
-      setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
-    }
+    if (hour) await openNewEventModal(currentScheduleDate(), hour);
 
-  } else if (action === 'cal-add-event') {
-    const input = document.getElementById('cal-event-input');
-    const text = input?.value.trim();
-    if (text) { await addCalEvent(text); if (input) input.value = ''; }
+  } else if (action === 'cal-refresh') {
+    loadCalendarEvents(false);
+    rerenderActiveView();
+
+  } else if (action === 'cal-new-event') {
+    if (store.calendarSelectedDate) await openNewEventModal(store.calendarSelectedDate);
+
+  } else if (action === 'cal-edit-event') {
+    const evId = target.dataset.id;
+    const calId = target.dataset.calendarId;
+    const ev = store.events.find(e => e.id === evId && e.calendarId === calId);
+    if (ev) await openEditEventModal(ev);
 
   } else if (action === 'cal-delete-event') {
     event.stopPropagation();
-    const evId = parseInt(target.dataset.id);
-    const deletedEvent = store.events.find(e => e.id === evId);
+    const evId = target.dataset.id;
+    const calId = target.dataset.calendarId;
+    const deletedEvent = store.events.find(e => e.id === evId && e.calendarId === calId);
     try {
       await showConfirmDialog(
         'Delete event?',
         'This action cannot be undone.',
         async () => {
-          await db.run('DELETE FROM events WHERE id = ?', [evId]);
-          store.events = store.events.filter(e => e.id !== evId);
+          try {
+            await deleteGoogleEvent(calId, evId, { scope: 'this', recurringEventId: deletedEvent?.recurringEventId });
+          } catch (err) {
+            console.error('Google Calendar delete failed:', err);
+            showToast('Could not delete event. Please try again.', 'error');
+            return;
+          }
+          store.events = store.events.filter(e => !(e.id === evId && e.calendarId === calId));
           rerenderActiveView();
-          if (isGoogleSyncActive()) pushGoogleDelete(deletedEvent);
         }
       );
     } catch (error) {
@@ -728,8 +709,6 @@ async function handleDashboardClick(event) {
     if (existing) { existing.remove(); return; }
 
     // Build menu content
-    const advisorName = escapeHtml(store.settings?.advisor?.name || 'AI Advisor');
-    const advisorInLayout = store.settings.dashboard.layout.some(l => l.id === 'advisor');
     const tlItems = store.taskLists.map(list => {
       const icon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
       return `<div class="dash-add-menu-item" data-action="add-tasklist-widget" data-id="${list.id}">
@@ -746,9 +725,6 @@ async function handleDashboardClick(event) {
     menu.id = 'add-widget-menu';
     menu.className = 'dash-add-widget-menu dash-add-widget-menu-fixed';
     menu.innerHTML = `
-      <div class="dash-add-menu-section">AI</div>
-      <div class="dash-add-menu-item${advisorInLayout ? ' dash-add-menu-item-disabled' : ''}" data-action="add-advisor-widget">
-        <i data-lucide="bot" width="12" height="12"></i> ${advisorName}</div>
       ${store.taskLists.length ? `<div class="dash-add-menu-section">Task Lists</div>${tlItems}` : ''}
       ${store.notebooks.length ? `<div class="dash-add-menu-section">Notebooks</div>${nbItems}` : ''}
       <div class="dash-add-menu-section">Notes</div>
@@ -816,44 +792,6 @@ async function handleDashboardClick(event) {
     s.dashboard.layout = fresh.dashboard.layout;
     saveSettings(s);
     renderDashboard();
-
-  } else if (action === 'advisor-send' || action === 'advisor-widget-send') {
-    const isWidget = action === 'advisor-widget-send';
-    const inputEl = document.getElementById(isWidget ? 'adv-widget-input' : 'adv-input');
-    const text = inputEl?.value.trim();
-    if (!text || store.advisorLoading) return;
-    if (inputEl) { inputEl.value = ''; inputEl.style.height = 'auto'; }
-    store.advisorLoading = true;
-    const rerender = () => { if (store.currentView === 'advisor') renderAdvisorView(); else renderDashboard(); };
-    rerender();
-    try {
-      await runAdvisor(text, rerender);
-    } catch (err) {
-      store.advisorMessages.push({ role: 'assistant', text: `Error: ${err.message}` });
-    } finally {
-      store.advisorLoading = false;
-      rerender();
-    }
-
-  } else if (action === 'advisor-clear' || action === 'advisor-new-conv') {
-    startNewConversation();
-    renderAdvisorView();
-
-  } else if (action === 'advisor-load-conv') {
-    const convId = target.dataset.convId;
-    const convs = getAllConversations();
-    const conv = convs.find(c => c.id === convId);
-    if (conv) { loadConversation(conv); renderAdvisorView(); }
-
-  } else if (action === 'add-advisor-widget') {
-    document.getElementById('add-widget-menu')?.remove();
-    const already = store.settings.dashboard.layout.some(l => l.id === 'advisor');
-    if (!already) {
-      store.settings.dashboard.layout.push({ id: 'advisor', x: 0, y: 9999, w: 4, h: 6 });
-      saveSettings(store.settings);
-    }
-    document.getElementById('add-widget-menu')?.setAttribute('hidden', '');
-    renderDashboard();
   }
 }
 
@@ -876,10 +814,6 @@ async function handleDashboardKeydown(event) {
       const qtyInput = document.getElementById('task-qty-input');
       if (qtyInput) qtyInput.value = '1';
     }
-
-  } else if (event.target.id === 'cal-event-input') {
-    const text = event.target.value.trim();
-    if (text) { await addCalEvent(text); event.target.value = ''; }
   }
 }
 
@@ -946,6 +880,14 @@ function applySettingChange(input) {
 // Handle checkbox / radio changes — re-render settings view immediately
 function handleSettingsChange(event) {
   const input = event.target;
+
+  if (input.id === 'import-data-input') {
+    const file = input.files?.[0];
+    input.value = ''; // allow re-selecting the same file later
+    if (file) importDataFromFile(file, document.querySelector('[data-action="import-data-pick"]'));
+    return;
+  }
+
   if (!applySettingChange(input)) return;
 
   if (input.dataset.setting === 'dashboard.tasksSortOrder') sortTasks();
@@ -974,7 +916,7 @@ async function handleSettingsClick(event) {
     try {
       await connectGoogleCalendar();
       showToast('Connected to Google Calendar.', 'success');
-      await syncGoogleCalendar();
+      await refreshEvents();
       rerenderActiveView();
     } catch (error) {
       console.error('Google Calendar connect failed:', error);
@@ -987,19 +929,20 @@ async function handleSettingsClick(event) {
       await disconnectGoogleCalendar();
       showToast('Disconnected from Google Calendar.', 'success');
       renderSidebar();
+      if (store.currentView === 'calendar' || store.currentView === 'dashboard') rerenderActiveView();
     } catch (error) {
       console.error('Google Calendar disconnect failed:', error);
       showToast('Could not disconnect. Please try again.', 'error');
     }
     renderSettingsView();
-  } else if (btn.dataset.action === 'google-sync-now') {
+  } else if (btn.dataset.action === 'google-refresh') {
     btn.disabled = true;
     try {
-      await syncGoogleCalendar();
+      await refreshEvents();
       rerenderActiveView();
     } catch (error) {
-      console.error('Google Calendar sync failed:', error);
-      showToast('Sync failed. Please try again.', 'error');
+      console.error('Google Calendar refresh failed:', error);
+      showToast('Refresh failed. Please try again.', 'error');
     }
     renderSettingsView();
   } else if (btn.dataset.action === 'toggle-google-calendar') {
@@ -1009,6 +952,106 @@ async function handleSettingsClick(event) {
       cal.selected = !cal.selected;
       saveSettings(store.settings);
       renderSettingsView();
+      loadCalendarEvents(false);
+    }
+  } else if (btn.dataset.action === 'export-data') {
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Exporting…';
+    await exportData();
+    btn.disabled = false;
+    btn.innerHTML = originalLabel;
+  } else if (btn.dataset.action === 'import-data-pick') {
+    document.getElementById('import-data-input')?.click();
+  }
+}
+
+// Tables in parent-before-child order (matches FK dependency direction).
+// notes_fts is deliberately excluded — it's an external-content FTS5 table kept in
+// sync automatically by the notes_ai/notes_ad/notes_au triggers already defined in
+// db.worker.js's createSchema(), so it's repopulated for free as `notes` rows are
+// deleted/re-inserted below.
+const BACKUP_TABLES = ['notebooks', 'tags', 'notes', 'note_tags', 'attachments', 'task_lists', 'tasks'];
+
+// Download all data as a portable JSON backup (plain SQL dump — no raw OPFS/file
+// access, so it can't conflict with the async OPFS VFS's own locking)
+async function exportData() {
+  try {
+    const dump = { version: 1, exportedAt: new Date().toISOString(), tables: {} };
+    for (const table of BACKUP_TABLES) {
+      dump.tables[table] = await db.all(`SELECT * FROM ${table}`);
+    }
+    const blob = new Blob([JSON.stringify(dump)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `notely-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Backup downloaded.', 'success');
+  } catch (error) {
+    console.error('Export failed:', error);
+    showToast('Export failed. Please try again.', 'error');
+  }
+}
+
+// Replace all data with the contents of a backup file, via plain DELETE/INSERT.
+// `btn` (the visible "Import data" button) is optional — when given, its label is
+// used to show live progress, since this walks every row one at a time through the
+// Worker and can take a noticeable moment on a larger backup.
+async function importDataFromFile(file, btn) {
+  const confirmed = await showTypeConfirmDialog(
+    'Import data?',
+    'This will <strong>replace everything currently in Notely</strong> with the contents of the backup file. This cannot be undone.',
+    'IMPORT'
+  );
+  if (!confirmed) return;
+
+  const originalLabel = btn?.innerHTML;
+  const setProgress = (text) => { if (btn) btn.textContent = text; };
+
+  if (btn) btn.disabled = true;
+
+  try {
+    setProgress('Reading file…');
+    const dump = JSON.parse(await file.text());
+    if (!dump || typeof dump.tables !== 'object') {
+      throw new Error('Not a valid Notely backup file');
+    }
+
+    setProgress('Clearing existing data…');
+    // Children before parents
+    for (const table of [...BACKUP_TABLES].reverse()) {
+      await db.run(`DELETE FROM ${table}`);
+    }
+
+    const totalRows = BACKUP_TABLES.reduce((sum, t) => sum + (dump.tables[t]?.length || 0), 0);
+    let done = 0;
+
+    // Parents before children
+    for (const table of BACKUP_TABLES) {
+      for (const row of dump.tables[table] || []) {
+        const cols = Object.keys(row);
+        if (cols.length) {
+          const sql = `INSERT INTO ${table} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`;
+          await db.run(sql, cols.map(c => row[c]));
+        }
+        done++;
+        if (totalRows) setProgress(`Importing… ${done}/${totalRows}`);
+      }
+    }
+
+    setProgress('Reloading…');
+    showToast('Data imported. Reloading…', 'success');
+    setTimeout(() => location.reload(), 400);
+  } catch (error) {
+    console.error('Import failed:', error);
+    showToast('Import failed. The file may not be a valid Notely backup.', 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel;
     }
   }
 }
@@ -1016,7 +1059,7 @@ async function handleSettingsClick(event) {
 async function clearAllData() {
   const confirmed = await showTypeConfirmDialog(
     'Clear all data?',
-    'This will permanently delete <strong>all notes, notebooks, tasks, task lists, and events</strong>. This cannot be undone.',
+    'This will permanently delete <strong>all notes, notebooks, tasks, and task lists</strong>. This cannot be undone. (Google Calendar events are not affected.)',
     'DELETE'
   );
   if (!confirmed) return;
@@ -1025,13 +1068,11 @@ async function clearAllData() {
   await db.run('DELETE FROM notebooks');
   await db.run('DELETE FROM tasks');
   await db.run('DELETE FROM task_lists');
-  await db.run('DELETE FROM events');
 
   store.notes = [];
   store.notebooks = [];
   store.tasks = [];
   store.taskLists = [];
-  store.events = [];
   store.currentNote = null;
   store.currentNotebook = null;
   store.currentTaskList = null;
@@ -1089,29 +1130,99 @@ function rerenderActiveView() {
   if (store.currentView === 'dashboard') renderDashboard();
   else if (store.currentView === 'tasks') renderTasksView();
   else if (store.currentView === 'calendar') renderCalendarView();
-  else if (store.currentView === 'advisor') renderAdvisorView();
   else if (store.currentView === 'settings') renderSettingsView();
 }
 
-// Add a calendar event
-async function addCalEvent(title) {
-  const date = store.calendarSelectedDate;
-  if (!date || !title) return;
-  const time = document.getElementById('cal-event-time')?.value || null;
-  const result = await db.run(
-    'INSERT INTO events (title, date, time) VALUES (?, ?, ?)',
-    [title, date, time || null]
-  );
-  const newEvent = await db.get('SELECT * FROM events WHERE id = ?', [result.lastInsertId]);
-  store.events.push(newEvent);
-  store.events.sort((a, b) =>
-    a.date.localeCompare(b.date) ||
-    (a.time || '').localeCompare(b.time || '') ||
-    a.id - b.id
-  );
-  rerenderActiveView();
-  setTimeout(() => document.getElementById('cal-event-input')?.focus(), 0);
-  if (isGoogleSyncActive()) pushGoogleCreate(newEvent);
+// Fetch events for the currently visible calendar range from Google Calendar
+// (background = true keeps whatever's already rendered visible while the
+// refetch is in flight — no blocking spinner except on first load/connect).
+function loadCalendarEvents(background) {
+  if (!isGoogleSyncActive()) return;
+  refreshEvents({ background })
+    .then(() => {
+      if (store.currentView === 'calendar' || store.currentView === 'dashboard') rerenderActiveView();
+    })
+    .catch(err => console.warn('[google-calendar] refresh failed:', err.message));
+}
+
+// The date whose schedule the day-schedule pane is currently showing
+function currentScheduleDate() {
+  const pad = n => String(n).padStart(2, '0');
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+  return store.calendarSelectedDate || todayStr;
+}
+
+function eventSortComparator(a, b) {
+  return a.date.localeCompare(b.date) || (a.time || '').localeCompare(b.time || '') || a.id.localeCompare(b.id);
+}
+
+// Open the create-event modal and save directly to Google Calendar
+async function openNewEventModal(dateStr, startTime = null) {
+  const gcal = store.settings.googleCalendar;
+  if (!isGoogleSyncActive() || !gcal.writeCalendarId) {
+    showToast('Connect Google Calendar in Settings to add events.', 'error');
+    return;
+  }
+
+  const result = await showEventModal({ mode: 'create', dateStr, startTime });
+  if (!result || result.action !== 'save') return;
+
+  try {
+    const newEvent = await createGoogleEvent(gcal.writeCalendarId, result.data);
+    store.events.push(newEvent);
+    store.events.sort(eventSortComparator);
+    rerenderActiveView();
+  } catch (err) {
+    console.error('Google Calendar create failed:', err);
+    showToast('Could not create event. Please try again.', 'error');
+  }
+}
+
+// Open the edit modal for an existing event, exposing start/end, recurrence and color
+async function openEditEventModal(ev) {
+  let recurrencePreset = ev.recurrencePreset;
+  if (ev.recurringEventId) {
+    // Instances don't carry their own `recurrence` field — fetch the series
+    // master so the "Repeats" dropdown reflects the actual series setting.
+    try {
+      const master = await getGoogleEvent(ev.calendarId, ev.recurringEventId);
+      recurrencePreset = master.recurrencePreset;
+    } catch (err) {
+      console.warn('Could not load recurring series details:', err.message);
+    }
+  }
+
+  const result = await showEventModal({ mode: 'edit', event: { ...ev, recurrencePreset } });
+  if (!result) return;
+
+  if (result.action === 'delete') {
+    try {
+      await deleteGoogleEvent(ev.calendarId, ev.id, { scope: result.scope, recurringEventId: ev.recurringEventId });
+      loadCalendarEvents(false);
+      rerenderActiveView();
+    } catch (err) {
+      console.error('Google Calendar delete failed:', err);
+      showToast('Could not delete event. Please try again.', 'error');
+    }
+    return;
+  }
+
+  // Recurrence only applies when editing the whole series (or a plain,
+  // non-recurring event, where there's no "this vs all" distinction).
+  const scope = ev.recurringEventId ? result.scope : 'all';
+  try {
+    await updateGoogleEvent(ev.calendarId, ev.id, result.data, {
+      scope, recurringEventId: ev.recurringEventId, originalDate: result.originalDate
+    });
+    // A scope:'all' edit can shift every occurrence — simplest to just
+    // refetch the visible window rather than hand-patch the local cache.
+    loadCalendarEvents(false);
+    rerenderActiveView();
+  } catch (err) {
+    console.error('Google Calendar update failed:', err);
+    showToast('Could not update event. Please try again.', 'error');
+  }
 }
 
 // Add a new task to the current list
