@@ -72,3 +72,9 @@ Node.js.
 The bridge listens on `127.0.0.1:3779`; native-host's other Node bridge
 (`bridge.js`) is unused leftover from an earlier approach and isn't wired
 up to anything — `bridge.bat` runs `bridge.py` directly.
+
+## Third-party code
+
+Notely vendors GridStack and sqlite-wasm directly (no build step re-fetches
+them) — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for their
+licenses.
