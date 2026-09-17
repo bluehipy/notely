@@ -1,7 +1,6 @@
 // Tool executor — backs the WebMCP surface (app.js) and the native-bridge/MCP
-// server relay (background.js -> chrome.runtime.onMessage). This is not the
-// in-app AI Advisor (removed) — it's what lets an external MCP client (e.g.
-// Claude Desktop) read and act on Notely's data via tool calls.
+// server relay (background.js -> chrome.runtime.onMessage), letting an
+// external MCP client (e.g. Claude Desktop) read and act on Notely's data.
 
 import { store } from './store.js';
 import { db } from './db.js';

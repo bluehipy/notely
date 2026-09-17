@@ -3,7 +3,7 @@
 import { db, waitForReady } from './db.js';
 import { store } from './store.js';
 import { renderSidebar, renderNoteList, renderEditor, renderDashboard, renderTasksView, renderCalendarView, renderSettingsView, showNotePanels, showConfirmDialog, showEventModal, showToast, refreshDashboardWidgets, escapeHtml } from './render.js';
-import { executeTool } from './advisor.js';
+import { executeTool } from './tools.js';
 import { saveSettings } from './settings.js';
 import { connect as connectGoogleCalendar, disconnect as disconnectGoogleCalendar, refreshEvents, createEvent as createGoogleEvent, updateEvent as updateGoogleEvent, deleteEvent as deleteGoogleEvent, getEvent as getGoogleEvent, isActive as isGoogleSyncActive } from './google-calendar.js';
 import { initTheme, toggleTheme, applyAppearance } from './theme.js';
