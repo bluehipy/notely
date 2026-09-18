@@ -578,6 +578,10 @@ function eventChipStyle(ev) {
   return hex ? ` style="border-left:3px solid ${hex}"` : '';
 }
 
+function eventChipDotColor(ev) {
+  return eventColorHex(ev.colorId) || 'var(--color-primary)';
+}
+
 function buildDayScheduleHTML(dateStr) {
   const pad = n => String(n).padStart(2, '0');
   const today = new Date();
@@ -667,17 +671,15 @@ function buildCalendarHTML() {
     const isToday    = dateStr === todayStr;
     const isSelected = dateStr === store.calendarSelectedDate;
     const evs        = byDate[dateStr] || [];
-    const evHTML = evs.map(ev => `
-      <div class="cal-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
-        ${ev.time ? `<span class="cal-event-time">${escapeHtml(ev.time)}</span>` : ''}
-        <span class="cal-event-text">${escapeHtml(ev.title)}</span>
-        <span class="cal-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
-      </div>`).join('');
+    const dotsHTML = evs.length
+      ? `<div class="cal-day-dots">${evs.slice(0, 4).map(ev =>
+          `<span class="cal-day-dot" style="background:${eventChipDotColor(ev)}"></span>`).join('')}</div>`
+      : '';
     return `
       <div class="cal-day${isToday ? ' today' : ''}${isSelected ? ' selected' : ''}"
            data-action="cal-day-click" data-date="${dateStr}">
         <span class="cal-day-num">${n}</span>
-        <div class="cal-events">${evHTML}</div>
+        ${dotsHTML}
       </div>`;
   }).join('');
 
