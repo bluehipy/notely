@@ -81,12 +81,9 @@ export function renderSidebar() {
         <div class="sidebar-item ${store.currentView === 'dashboard' ? 'selected' : ''}" data-action="select-dashboard" title="Dashboard">
           <i data-lucide="layout-dashboard"></i>
           <span class="sidebar-item-text">Dashboard</span>
+          ${store.currentView === 'dashboard' ? `
+          <i class="sidebar-item-action" data-lucide="plus-square" data-action="toggle-add-widget-menu" title="Add widget"></i>` : ''}
         </div>
-        ${store.currentView === 'dashboard' ? `
-        <div class="sidebar-item primary" data-action="toggle-add-widget-menu" title="Add widget">
-          <i data-lucide="plus-square"></i>
-          <span class="sidebar-item-text">Add widget</span>
-        </div>` : ''}
         <div class="sidebar-item ${store.currentView === 'calendar' ? 'selected' : ''}" data-action="select-calendar" title="Calendar">
           <i data-lucide="calendar"></i>
           <span class="sidebar-item-text">Calendar</span>
@@ -539,6 +536,9 @@ export function renderDashboard() {
       }, 400);
     });
   }
+
+  // Scroll any event-widget timelines so the current hour (or a default) is visible
+  setTimeout(() => scrollTimelinesToDefault(dashboardEl), 0);
 }
 
 // Map tool names to a predicate that returns true for widget IDs they affect
@@ -564,6 +564,7 @@ export function refreshDashboardWidgets(toolName) {
       if (body) {
         body.innerHTML = buildWidgetContent(wid, ds);
         if (window.lucide) window.lucide.createIcons({ nodes: Array.from(body.querySelectorAll('[data-lucide]')) });
+        setTimeout(() => scrollTimelinesToDefault(body), 0);
       }
     }
   });
@@ -573,33 +574,147 @@ function eventColorHex(colorId) {
   return EVENT_COLORS.find(c => c.id === colorId)?.hex || null;
 }
 
-function eventChipStyle(ev) {
+// Picks readable text color for a given hex background (W3C-ish relative luminance)
+function contrastTextColor(hex) {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.substring(0, 2), 16);
+  const g = parseInt(c.substring(2, 4), 16);
+  const b = parseInt(c.substring(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#1a1a1a' : '#ffffff';
+}
+
+// Raw CSS declarations (no wrapping style="") for an event's background color, if it has one
+function eventColorCSS(ev) {
   const hex = eventColorHex(ev.colorId);
-  return hex ? ` style="border-left:3px solid ${hex}"` : '';
+  if (!hex) return '';
+  return `background:${hex};color:${contrastTextColor(hex)};border-left-color:${hex};`;
+}
+
+function eventChipStyle(ev) {
+  const css = eventColorCSS(ev);
+  return css ? ` style="${css}"` : '';
 }
 
 function eventChipDotColor(ev) {
   return eventColorHex(ev.colorId) || 'var(--color-primary)';
 }
 
-function buildDayScheduleHTML(dateStr) {
+function parseTimeMinutes(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+// Groups timed events into overlap clusters and assigns each a side-by-side column,
+// so events that happen at the same time sit next to each other instead of stacking.
+function layoutTimedEvents(events) {
+  const withRange = events
+    .map(ev => {
+      const start = parseTimeMinutes(ev.time);
+      let end = ev.endTime ? parseTimeMinutes(ev.endTime) : start + 60;
+      if (end <= start) end = start + 30; // guard against bad/zero-length data
+      end = Math.min(end, 1440);
+      return { ev, start, end };
+    })
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const placed = [];
+  let cluster = [];
+  let clusterEnd = -Infinity;
+
+  const flush = () => {
+    if (!cluster.length) return;
+    const colEnds = [];
+    cluster.forEach(item => {
+      let col = colEnds.findIndex(end => end <= item.start);
+      if (col === -1) { col = colEnds.length; colEnds.push(item.end); }
+      else colEnds[col] = item.end;
+      item.col = col;
+    });
+    const numCols = colEnds.length;
+    cluster.forEach(item => { item.numCols = numCols; placed.push(item); });
+    cluster = [];
+  };
+
+  withRange.forEach(item => {
+    if (item.start >= clusterEnd) { flush(); clusterEnd = -Infinity; }
+    cluster.push(item);
+    clusterEnd = Math.max(clusterEnd, item.end);
+  });
+  flush();
+
+  return placed;
+}
+
+// Renders an hourly grid for `dateStr` with timed events absolutely positioned by their
+// actual start/end interval (top/height proportional to time-of-day), colored per event.
+// Used both by the full calendar-page day view and, at a smaller scale, dashboard widgets.
+function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'main', compact = false } = {}) {
   const pad = n => String(n).padStart(2, '0');
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
   const isToday = dateStr === todayStr;
 
+  const timedEvents = store.events.filter(ev => ev.date === dateStr && !!ev.time);
+  const placed = layoutTimedEvents(timedEvents);
+  const totalHeight = rowHeight * 24;
+
+  const hourRows = Array.from({ length: 24 }, (_, h) => {
+    const isCurrent = isToday && h === today.getHours();
+    return `
+      <div class="ds-hour${isCurrent ? ' ds-hour-current' : ''}" style="height:${rowHeight}px" data-action="ds-hour-click" data-hour="${pad(h)}:00" data-date="${dateStr}">
+        <span class="ds-hour-label" style="width:${labelWidth}px">${pad(h)}:00</span>
+        <div class="ds-hour-body"></div>
+      </div>`;
+  }).join('');
+
+  const nowMarker = isToday
+    ? `<div class="ds-now-line" style="top:${((today.getHours() * 60 + today.getMinutes()) / 60) * rowHeight}px"></div>`
+    : '';
+
+  const eventBlocks = placed.map(({ ev, start, end, col, numCols }) => {
+    const top = (start / 60) * rowHeight;
+    const height = Math.max((end - start) / 60 * rowHeight, compact ? 14 : 18);
+    const timeLabel = ev.endTime ? `${ev.time}–${ev.endTime}` : ev.time;
+    return `
+      <div class="ds-event${compact ? ' ds-event-compact' : ''}" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}"
+           title="${escapeHtml(ev.title)} (${escapeHtml(timeLabel)})"
+           style="top:${top}px;height:${height}px;left:calc(${(col / numCols) * 100}% + 2px);width:calc(${100 / numCols}% - 4px);${eventColorCSS(ev)}">
+        <span class="ds-event-time">${escapeHtml(timeLabel)}</span>
+        <span class="ds-event-title">${escapeHtml(ev.title)}</span>
+        <span class="ds-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="ds-hours${compact ? ' ds-hours-compact' : ''}" id="ds-hours-scroll-${uid}">
+      <div class="ds-hours-grid" style="height:${totalHeight}px">
+        ${hourRows}
+        <div class="ds-events-layer" style="left:${labelWidth}px">${nowMarker}${eventBlocks}</div>
+      </div>
+    </div>`;
+}
+
+// Scrolls every timeline under `root` to its current-hour marker (if showing today) or
+// a sensible default (~7am), so the visible interval opens somewhere useful.
+export function scrollTimelinesToDefault(root) {
+  root.querySelectorAll('.ds-hours').forEach(el => {
+    const current = el.querySelector('.ds-hour-current');
+    if (current) {
+      current.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } else {
+      el.scrollTop = Math.max(0, el.scrollHeight * (7 / 24) - el.clientHeight / 2);
+    }
+  });
+}
+
+function buildDayScheduleHTML(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   const dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   const dayEvents = store.events.filter(ev => ev.date === dateStr);
   const allDayEvents = dayEvents.filter(ev => !ev.time);
-  const timedEvents = dayEvents.filter(ev => !!ev.time);
-
-  const byHour = {};
-  timedEvents.forEach(ev => {
-    const h = parseInt(ev.time.split(':')[0]);
-    (byHour[h] = byHour[h] || []).push(ev);
-  });
 
   const allDayHTML = allDayEvents.length
     ? `<div class="ds-allday">
@@ -613,35 +728,11 @@ function buildDayScheduleHTML(dateStr) {
        </div>`
     : '';
 
-  const nowHour = today.getHours();
-  const nowMin  = today.getMinutes();
-
-  const rows = Array.from({ length: 24 }, (_, h) => {
-    const evs = byHour[h] || [];
-    const isCurrent = isToday && h === nowHour;
-    const nowMarker = isCurrent
-      ? `<div class="ds-now-line" style="top:${(nowMin / 60) * 100}%"></div>`
-      : '';
-    const evHTML = evs.map(ev => `
-      <div class="ds-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
-        <span class="ds-event-time">${escapeHtml(ev.time)}</span>
-        <span class="ds-event-title">${escapeHtml(ev.title)}</span>
-        <span class="ds-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
-      </div>`).join('');
-    return `
-      <div class="ds-hour${isCurrent ? ' ds-hour-current' : ''}" data-action="ds-hour-click" data-hour="${pad(h)}:00">
-        <span class="ds-hour-label">${pad(h)}:00</span>
-        <div class="ds-hour-body">
-          ${nowMarker}${evHTML}
-        </div>
-      </div>`;
-  }).join('');
-
   return `
     <div class="day-schedule">
       <div class="ds-header">${dateLabel}</div>
       ${allDayHTML}
-      <div class="ds-hours" id="ds-hours-scroll">${rows}</div>
+      ${buildTimelineHTML(dateStr, { rowHeight: 48, labelWidth: 52, uid: 'main' })}
     </div>`;
 }
 
@@ -728,20 +819,29 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
     const isToday = dateStr === todayStr;
     const heading = isToday ? 'Today' : offset === 0 ? 'Selected' : offset === 1 ? 'Tomorrow' : 'In 2 days';
     const sub     = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    const evs     = byDate[dateStr] || [];
-    const evHTML  = evs.length
-      ? evs.map(ev => `
-          <div class="threeday-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
-            ${ev.time ? `<span class="threeday-event-time">${escapeHtml(ev.time)}</span>` : ''}
-            <span class="threeday-event-title">${escapeHtml(ev.title)}</span>
-            <span class="threeday-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
-          </div>`).join('')
-      : `<span class="threeday-empty">No events</span>`;
+    const evs        = byDate[dateStr] || [];
+    const allDayEvs  = evs.filter(ev => !ev.time);
+    const hasTimed   = evs.some(ev => !!ev.time);
+
+    const allDayHTML = allDayEvs.length
+      ? `<div class="threeday-events">
+          ${allDayEvs.map(ev => `
+            <div class="threeday-event" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="${escapeHtml(ev.title)}"${eventChipStyle(ev)}>
+              <span class="threeday-event-title">${escapeHtml(ev.title)}</span>
+              <span class="threeday-event-x" data-action="cal-delete-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}" title="Delete event">×</span>
+            </div>`).join('')}
+        </div>`
+      : '';
+
+    const bodyHTML = !allDayEvs.length && !hasTimed
+      ? `<span class="threeday-empty">No events</span>`
+      : `${allDayHTML}${hasTimed ? buildTimelineHTML(dateStr, { rowHeight: 26, labelWidth: 30, uid: `col-${offset}`, compact: true }) : ''}`;
+
     return `
       <div class="threeday-col${isRef ? ' threeday-col-ref' : ''}">
         <div class="threeday-heading">${heading}</div>
         <div class="threeday-sub">${sub}</div>
-        <div class="threeday-events">${evHTML}</div>
+        ${bodyHTML}
       </div>`;
   });
 
@@ -926,17 +1026,8 @@ export function renderCalendarView() {
 
   if (window.lucide) window.lucide.createIcons();
 
-  // Scroll hours timeline so current hour is visible (if viewing today)
-  setTimeout(() => {
-    const currentHourEl = document.querySelector('.ds-hour-current');
-    if (currentHourEl) {
-      currentHourEl.scrollIntoView({ behavior: 'instant', block: 'center' });
-    } else {
-      // For non-today dates, scroll to 8am
-      const hoursEl = document.getElementById('ds-hours-scroll');
-      if (hoursEl) hoursEl.scrollTop = 48 * 8;
-    }
-  }, 0);
+  // Scroll the day timeline so the current hour (or a sensible default) is visible
+  setTimeout(() => scrollTimelinesToDefault(calendarEl), 0);
 }
 
 // Render Settings full-page view

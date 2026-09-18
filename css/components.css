@@ -59,6 +59,15 @@
   opacity: 1;
 }
 
+.sidebar-item-action {
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sidebar-item-action:hover {
+  background: var(--color-border-muted);
+}
+
 /* ===== TagSidebarItem ===== */
 .tag-sidebar-item {
   height: 32px;

@@ -67,7 +67,8 @@ html.has-bg-image .dashboard {
 .sidebar.collapsed .sidebar-item-text,
 .sidebar.collapsed .sidebar-section-header,
 .sidebar.collapsed .sidebar-item-delete,
-.sidebar.collapsed .sidebar-item-badge {
+.sidebar.collapsed .sidebar-item-badge,
+.sidebar.collapsed .sidebar-item-action {
   display: none;
 }
 
@@ -405,11 +406,12 @@ html.has-bg-image .dashboard {
 }
 
 .ds-allday-event {
+  position: relative;
   font-size: var(--text-xs);
   background: var(--color-primary-muted);
   color: var(--color-primary);
   border-radius: var(--radius-sm);
-  padding: 2px 6px;
+  padding: 2px 18px 2px 6px;
   cursor: pointer;
 }
 .ds-allday-event:hover { opacity: 0.75; }
@@ -417,29 +419,43 @@ html.has-bg-image .dashboard {
 .ds-hours {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
   max-height: calc(100vh - 260px);
+  position: relative;
+}
+
+.ds-hours-compact {
+  max-height: 220px;
+}
+
+.ds-hours-grid {
+  position: relative;
 }
 
 .ds-hour {
   display: flex;
   gap: 0;
-  min-height: 48px;
   border-bottom: 1px solid var(--color-border-muted);
   position: relative;
   cursor: pointer;
   transition: background 80ms;
+  box-sizing: border-box;
 }
 .ds-hour:hover { background: var(--color-border-muted); }
 
 .ds-hour-label {
-  width: 52px;
   flex-shrink: 0;
   font-size: var(--text-xs);
   color: var(--color-text-faint);
   padding: var(--space-xs) var(--space-sm) 0 0;
   text-align: right;
   line-height: 1;
+}
+
+.ds-hours-compact .ds-hour-label {
+  font-size: 9px;
+  padding: 2px 4px 0 0;
 }
 
 .ds-hour-current .ds-hour-label {
@@ -449,18 +465,20 @@ html.has-bg-image .dashboard {
 
 .ds-hour-body {
   flex: 1;
-  position: relative;
-  min-height: 48px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-sm);
   border-left: 1px solid var(--color-border-muted);
+}
+
+.ds-events-layer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
 }
 
 .ds-now-line {
   position: absolute;
-  left: -1px;
+  left: 0;
   right: 0;
   height: 2px;
   background: var(--color-danger);
@@ -479,28 +497,40 @@ html.has-bg-image .dashboard {
 }
 
 .ds-event {
+  position: absolute;
   display: flex;
-  align-items: center;
-  gap: var(--space-xs);
+  flex-direction: column;
+  overflow: hidden;
   background: var(--color-primary-muted);
   border-left: 3px solid var(--color-primary);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  padding: 2px var(--space-xs);
+  border-radius: var(--radius-sm);
+  padding: 2px 16px 2px var(--space-xs);
   font-size: var(--text-xs);
+  color: var(--color-text-strong);
   cursor: pointer;
-  position: relative;
   z-index: 1;
+  pointer-events: auto;
+  box-sizing: border-box;
+  line-height: 1.3;
 }
-.ds-event:hover { opacity: 0.8; }
+.ds-event:hover { opacity: 0.85; }
+
+.ds-event-compact {
+  padding: 1px 12px 1px 3px;
+  font-size: 9px;
+  border-left-width: 2px;
+  gap: 0;
+}
 
 .ds-event-time {
-  color: var(--color-primary);
+  color: inherit;
   font-weight: 600;
   flex-shrink: 0;
+  opacity: 0.85;
 }
 
 .ds-event-title {
-  color: var(--color-text-strong);
+  color: inherit;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -508,14 +538,21 @@ html.has-bg-image .dashboard {
 }
 
 .ds-event-x {
-  color: var(--color-text-faint);
-  flex-shrink: 0;
+  --evx-inset: 2px;
+  position: absolute;
+  top: var(--evx-inset);
+  right: var(--evx-inset);
+  color: inherit;
   opacity: 0;
   font-size: 14px;
   line-height: 1;
 }
+.ds-event-compact .ds-event-x {
+  --evx-inset: 1px;
+  font-size: 10px;
+}
 .ds-event:hover .ds-event-x,
-.ds-allday-event:hover .ds-event-x { opacity: 1; }
+.ds-allday-event:hover .ds-event-x { opacity: 0.7; }
 
 .dashboard-layout {
   display: flex;
@@ -878,12 +915,13 @@ html.has-bg-image .dashboard {
 }
 
 .threeday-event {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 3px;
   font-size: 11px;
   line-height: 1.4;
-  padding: 2px 4px;
+  padding: 2px 16px 2px 4px;
   border-radius: 3px;
   cursor: pointer;
   background: var(--color-primary-muted);
@@ -893,7 +931,7 @@ html.has-bg-image .dashboard {
 .threeday-event:hover { background: var(--color-danger-muted); color: var(--color-danger); }
 .threeday-event-time { flex-shrink: 0; font-weight: 600; opacity: 0.8; }
 .threeday-event-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.threeday-event-x { flex-shrink: 0; opacity: 0.5; }
+.threeday-event-x { --evx-inset: 2px; position: absolute; top: var(--evx-inset); right: var(--evx-inset); opacity: 0.5; }
 
 .threeday-empty {
   font-size: 11px;

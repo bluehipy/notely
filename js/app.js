@@ -662,8 +662,10 @@ async function handleDashboardClick(event) {
     }
 
   } else if (action === 'ds-hour-click') {
-    const hour = target.closest('[data-hour]')?.dataset.hour;
-    if (hour) await openNewEventModal(currentScheduleDate(), hour);
+    const hourEl = target.closest('[data-hour]');
+    const hour = hourEl?.dataset.hour;
+    const date = hourEl?.dataset.date || currentScheduleDate();
+    if (hour) await openNewEventModal(date, hour);
 
   } else if (action === 'cal-refresh') {
     loadCalendarEvents(false);
@@ -708,6 +710,12 @@ async function handleDashboardClick(event) {
     const existing = document.getElementById('add-widget-menu');
     if (existing) { existing.remove(); return; }
 
+    // Capture the trigger's position *before* building the menu — lucide.createIcons()
+    // below re-scans and replaces every [data-lucide] element in the whole document
+    // (it ignores the `nodes` option), which would detach `target` if it's an icon
+    // itself and make a later getBoundingClientRect() read all zeros.
+    const triggerRect = target.getBoundingClientRect();
+
     // Build menu content
     const tlItems = store.taskLists.map(list => {
       const icon = list.type === 'priority' ? 'bell' : list.type === 'quantity' ? 'shopping-cart' : 'check-square';
@@ -733,15 +741,17 @@ async function handleDashboardClick(event) {
     if (window.lucide) window.lucide.createIcons({ nodes: Array.from(menu.querySelectorAll('[data-lucide]')) });
 
     // Position to the right of the triggering sidebar item
-    const rect = target.getBoundingClientRect();
-    menu.style.top = `${rect.top}px`;
-    menu.style.left = `${rect.right + 4}px`;
+    menu.style.top = `${triggerRect.top}px`;
+    menu.style.left = `${triggerRect.right + 4}px`;
 
     // Route menu item clicks through the dashboard handler
     menu.addEventListener('click', handleDashboardClick);
 
     const closeMenu = (e) => {
-      if (!menu.contains(e.target) && e.target !== target && !target.contains(e.target)) {
+      // Re-query the trigger live: lucide.createIcons() (above) may have replaced the
+      // original `target` node with a new one carrying the same attributes.
+      const liveTrigger = document.querySelector('[data-action="toggle-add-widget-menu"]');
+      if (!menu.contains(e.target) && e.target !== liveTrigger && !(liveTrigger && liveTrigger.contains(e.target))) {
         menu.remove();
         document.removeEventListener('click', closeMenu, true);
       }
