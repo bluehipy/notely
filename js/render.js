@@ -650,7 +650,7 @@ function layoutTimedEvents(events) {
 // Renders an hourly grid for `dateStr` with timed events absolutely positioned by their
 // actual start/end interval (top/height proportional to time-of-day), colored per event.
 // Used both by the full calendar-page day view and, at a smaller scale, dashboard widgets.
-function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'main', compact = false } = {}) {
+function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'main', compact = false, wrap = true, showLabels = true } = {}) {
   const pad = n => String(n).padStart(2, '0');
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
@@ -662,9 +662,10 @@ function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'ma
 
   const hourRows = Array.from({ length: 24 }, (_, h) => {
     const isCurrent = isToday && h === today.getHours();
+    const label = showLabels ? `<span class="ds-hour-label" style="width:${labelWidth}px">${pad(h)}:00</span>` : '';
     return `
       <div class="ds-hour${isCurrent ? ' ds-hour-current' : ''}" style="height:${rowHeight}px" data-action="ds-hour-click" data-hour="${pad(h)}:00" data-date="${dateStr}">
-        <span class="ds-hour-label" style="width:${labelWidth}px">${pad(h)}:00</span>
+        ${label}
         <div class="ds-hour-body"></div>
       </div>`;
   }).join('');
@@ -687,12 +688,19 @@ function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'ma
       </div>`;
   }).join('');
 
+  const gridHTML = `
+    <div class="ds-hours-grid" style="height:${totalHeight}px">
+      ${hourRows}
+      <div class="ds-events-layer" style="left:${showLabels ? labelWidth : 0}px">${nowMarker}${eventBlocks}</div>
+    </div>`;
+
+  // wrap=false omits the per-instance scrollable wrapper so multiple days' grids can share
+  // a single scroll container (see buildRollingScheduleHTML) instead of scrolling independently.
+  if (!wrap) return gridHTML;
+
   return `
     <div class="ds-hours${compact ? ' ds-hours-compact' : ''}" id="ds-hours-scroll-${uid}">
-      <div class="ds-hours-grid" style="height:${totalHeight}px">
-        ${hourRows}
-        <div class="ds-events-layer" style="left:${labelWidth}px">${nowMarker}${eventBlocks}</div>
-      </div>
+      ${gridHTML}
     </div>`;
 }
 
@@ -709,14 +717,11 @@ export function scrollTimelinesToDefault(root) {
   });
 }
 
-function buildDayScheduleHTML(dateStr, uid = 'main') {
-  const d = new Date(dateStr + 'T00:00:00');
-  const dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-
+function buildAllDayHTML(dateStr) {
   const dayEvents = store.events.filter(ev => ev.date === dateStr);
   const allDayEvents = dayEvents.filter(ev => !ev.time);
 
-  const allDayHTML = allDayEvents.length
+  return allDayEvents.length
     ? `<div class="ds-allday">
         <span class="ds-allday-label">All day</span>
         <div class="ds-allday-events">
@@ -727,12 +732,59 @@ function buildDayScheduleHTML(dateStr, uid = 'main') {
         </div>
        </div>`
     : '';
+}
+
+function buildDayScheduleHTML(dateStr, uid = 'main') {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   return `
     <div class="day-schedule">
       <div class="ds-header">${dateLabel}</div>
-      ${allDayHTML}
+      ${buildAllDayHTML(dateStr)}
       ${buildTimelineHTML(dateStr, { rowHeight: 48, labelWidth: 52, uid })}
+    </div>`;
+}
+
+// Renders `days` consecutive days starting at `startDateStr` as ONE shared scroll container
+// (a single .ds-hours holding all days' hour-grids side by side, equal width, no per-day
+// scrollbar and no horizontal overflow) instead of independent day-schedule columns.
+function buildRollingScheduleHTML(startDateStr, days) {
+  const pad = n => String(n).padStart(2, '0');
+  const dates = Array.from({ length: days }, (_, i) => {
+    const d = new Date(startDateStr + 'T00:00:00');
+    d.setDate(d.getDate() + i);
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  });
+
+  const headerCols = dates.map(dateStr => {
+    const d = new Date(dateStr + 'T00:00:00');
+    // Short form ("22 Sep, Sun") - the full weekday/month/year label used for the single-day
+    // view doesn't fit these narrower columns.
+    const monthShort = d.toLocaleDateString('en-US', { month: 'short' });
+    const weekdayShort = d.toLocaleDateString('en-US', { weekday: 'short' });
+    const dateLabel = `${d.getDate()} ${monthShort}, ${weekdayShort}`;
+    return `
+      <div class="mdw-day-col">
+        <div class="mdw-day-col-inner">
+          <div class="ds-header">${dateLabel}</div>
+          ${buildAllDayHTML(dateStr)}
+        </div>
+      </div>`;
+  }).join('');
+
+  // Only the first day shows hour labels - they're shared visually for the whole row
+  // instead of being repeated in every column.
+  const gridCols = dates.map((dateStr, i) =>
+    buildTimelineHTML(dateStr, { rowHeight: 48, labelWidth: 52, uid: `day-${i}`, wrap: false, showLabels: i === 0 })
+  ).join('');
+
+  return `
+    <div class="day-schedule">
+      <div class="mdw-headers-row">${headerCols}</div>
+      <div class="ds-hours" id="ds-hours-scroll-multi">
+        <div class="mdw-grids-row">${gridCols}</div>
+      </div>
     </div>`;
 }
 
@@ -821,7 +873,6 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
     const sub     = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
     const evs        = byDate[dateStr] || [];
     const allDayEvs  = evs.filter(ev => !ev.time);
-    const hasTimed   = evs.some(ev => !!ev.time);
 
     const allDayHTML = allDayEvs.length
       ? `<div class="threeday-events">
@@ -833,9 +884,7 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
         </div>`
       : '';
 
-    const bodyHTML = !allDayEvs.length && !hasTimed
-      ? `<span class="threeday-empty">No events</span>`
-      : `${allDayHTML}${hasTimed ? buildTimelineHTML(dateStr, { rowHeight: 26, labelWidth: 30, uid: `col-${offset}`, compact: true }) : ''}`;
+    const bodyHTML = `${allDayHTML}${buildTimelineHTML(dateStr, { rowHeight: 26, labelWidth: 30, uid: `col-${offset}`, compact: true })}`;
 
     return `
       <div class="threeday-col${isRef ? ' threeday-col-ref' : ''}">
@@ -848,12 +897,10 @@ function buildThreeDayHTML(daysAhead = store.settings?.dashboard?.calendarDaysAh
   return `<div class="threeday">${cols.join('')}</div>`;
 }
 
-// Restore the standard note-list + editor panels (called when leaving dashboard/tasks/calendar/settings)
-function restoreHeaderSearch() {
+// Reset the header bar (called when leaving dashboard/tasks/calendar/settings)
+function resetHeader() {
   const ctx = document.getElementById('header-contextual');
   if (ctx) { ctx.innerHTML = ''; ctx.hidden = true; }
-  const searchEl = document.querySelector('.search-input-wrapper');
-  if (searchEl) searchEl.hidden = false;
   document.querySelector('.header')?.removeAttribute('hidden');
 }
 
@@ -866,7 +913,7 @@ export function showNotePanels() {
   const editorEl   = document.getElementById('editor');
   if (noteListEl) noteListEl.hidden = false;
   if (editorEl)   editorEl.hidden   = false;
-  restoreHeaderSearch();
+  resetHeader();
 }
 
 // Render Tasks full-page view
@@ -884,7 +931,6 @@ export function renderTasksView() {
   calendarEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
   tasksEl.hidden = false;
-  document.querySelector('.search-input-wrapper')?.setAttribute('hidden', '');
   document.getElementById('header-contextual')?.setAttribute('hidden', '');
 
   const list = store.taskLists.find(l => l.id === store.currentTaskList);
@@ -906,11 +952,7 @@ export function renderTasksView() {
         <div class="feature-view-title tl-title-editable" ${list ? `data-list-id="${list.id}" title="Click to rename"` : ''}
              style="${list ? 'cursor:text' : ''}">${escapeHtml(listName)}</div>
         ${total > 0 ? `<div class="feature-view-subtitle">${doneCount} of ${total} done</div>` : ''}
-        ${list ? `<select class="tl-type-select" data-action="set-tasklist-type" data-list-id="${list.id}" title="List type">
-          <option value="priority"${listType === 'priority' ? ' selected' : ''}>🔔 Priority</option>
-          <option value="quantity"${listType === 'quantity' ? ' selected' : ''}>🛒 Quantity</option>
-          <option value="basic"${listType === 'basic' ? ' selected' : ''}>☑ Basic</option>
-        </select>` : ''}
+        ${list ? `<button class="tl-menu-btn" data-action="toggle-tasklist-menu" data-list-id="${list.id}" title="List options"><i data-lucide="more-vertical"></i></button>` : ''}
       </div>
       <div class="task-add-row tasks-view-add-row">
         <input class="task-input" id="task-input" placeholder="${placeholder}" maxlength="200" autocomplete="off" />
@@ -990,7 +1032,6 @@ export function renderCalendarView() {
   tasksEl?.setAttribute('hidden', '');
   document.getElementById('settings-view')?.setAttribute('hidden', '');
   calendarEl.hidden = false;
-  document.querySelector('.search-input-wrapper')?.setAttribute('hidden', '');
   document.getElementById('header-contextual')?.setAttribute('hidden', '');
 
   const pad = n => String(n).padStart(2, '0');
@@ -1010,20 +1051,11 @@ export function renderCalendarView() {
 
   // Render single or multiple day schedules based on calendar.rollingDays setting
   const rollingDays = Math.max(1, Math.min(7, store.settings.calendar?.rollingDays ?? 1));
-  let scheduleHTML;
-  if (rollingDays === 1) {
-    // Single day: keep exact same structure as before
-    scheduleHTML = buildDayScheduleHTML(scheduleDate);
-  } else {
-    // Multiple days: render N columns side by side
-    const dayColumns = Array.from({ length: rollingDays }, (_, offset) => {
-      const d = new Date(scheduleDate + 'T00:00:00');
-      d.setDate(d.getDate() + offset);
-      const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-      return buildDayScheduleHTML(dateStr, `day-${offset}`);
-    }).join('');
-    scheduleHTML = `<div class="day-schedule-row">${dayColumns}</div>`;
-  }
+  // Single day: keep exact same structure as before. Multiple days: one shared-scroll
+  // container with equal-width columns (see buildRollingScheduleHTML).
+  const scheduleHTML = rollingDays === 1
+    ? buildDayScheduleHTML(scheduleDate)
+    : buildRollingScheduleHTML(scheduleDate, rollingDays);
 
   calendarEl.innerHTML = `
     <div class="feature-view-layout">
@@ -1056,7 +1088,7 @@ export function renderSettingsView() {
     document.getElementById(id)?.setAttribute('hidden', '')
   );
   el.hidden = false;
-  restoreHeaderSearch();
+  resetHeader();
 
   const s = store.settings;
   const d = s.dashboard;
@@ -1369,15 +1401,13 @@ export function renderSettingsView() {
 }
 
 // Render Note List
-export function renderNoteList(searchQuery = null) {
+export function renderNoteList() {
   const noteListElement = document.getElementById('note-list');
   if (!noteListElement) return;
 
   // Determine context label
   let contextLabel = 'All Notes';
-  if (searchQuery) {
-    contextLabel = `Search results for "${searchQuery}"`;
-  } else if (store.currentView === 'dashboard') {
+  if (store.currentView === 'dashboard') {
     contextLabel = 'Recent Notes';
   } else if (store.currentNotebook) {
     const notebook = store.notebooks.find(n => n.id === store.currentNotebook);
@@ -1389,28 +1419,16 @@ export function renderNoteList(searchQuery = null) {
 
   const noteCount = store.notes.length;
 
-  // Determine empty state message
-  let emptyStateHTML = '';
-  if (searchQuery) {
-    emptyStateHTML = `
-      <div class="empty-state">
-        <i class="empty-state-icon" data-lucide="search"></i>
-        <div class="empty-state-heading">No results for "${escapeHtml(searchQuery)}"</div>
-        <div class="empty-state-subtext">Try different keywords</div>
-      </div>
-    `;
-  } else {
-    emptyStateHTML = `
-      <div class="empty-state">
-        <i class="empty-state-icon" data-lucide="file-text"></i>
-        <div class="empty-state-heading">No notes yet</div>
-        <div class="empty-state-subtext">Create your first note to get started</div>
-      </div>
-    `;
-  }
+  const emptyStateHTML = `
+    <div class="empty-state">
+      <i class="empty-state-icon" data-lucide="file-text"></i>
+      <div class="empty-state-heading">No notes yet</div>
+      <div class="empty-state-subtext">Create your first note to get started</div>
+    </div>
+  `;
 
   const isDashboard = store.currentView === 'dashboard';
-  const isNotebookContext = !searchQuery && !isDashboard && store.currentNotebook !== null && store.currentTag === null;
+  const isNotebookContext = !isDashboard && store.currentNotebook !== null && store.currentTag === null;
   const currentNotebookData = isNotebookContext ? store.notebooks.find(n => n.id === store.currentNotebook) : null;
 
   const html = `
@@ -1480,7 +1498,7 @@ export function renderNoteList(searchQuery = null) {
             if (nb) nb.name = name;
           } catch (e) { console.error('Rename failed:', e); }
           renderSidebar();
-          renderNoteList(searchQuery);
+          renderNoteList();
         };
 
         const cancel = () => {

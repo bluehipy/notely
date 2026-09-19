@@ -24,16 +24,6 @@ export function initShortcuts(createNoteFn) {
       return;
     }
 
-    // Ctrl+F: Focus search input
-    if (event.ctrlKey && event.key === 'f') {
-      event.preventDefault();
-      const searchInput = document.querySelector('.search-input');
-      if (searchInput && !searchInput.disabled) {
-        searchInput.focus();
-      }
-      return;
-    }
-
     // Ctrl+B: Toggle bold
     if (event.ctrlKey && event.key === 'b') {
       event.preventDefault();
@@ -60,19 +50,6 @@ export function initShortcuts(createNoteFn) {
       const { textarea, insertMarkdown } = getEditorState();
       if (textarea && insertMarkdown) {
         insertMarkdown('[ ] ', '');
-      }
-      return;
-    }
-
-    // Escape: Clear search (if search input is focused)
-    if (event.key === 'Escape') {
-      const searchInput = document.querySelector('.search-input');
-      if (searchInput && document.activeElement === searchInput) {
-        event.preventDefault();
-        searchInput.value = '';
-        // Trigger input event to restore previous context
-        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-        searchInput.blur();
       }
       return;
     }

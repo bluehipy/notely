@@ -232,6 +232,7 @@ html.has-bg-image .dashboard {
   align-items: baseline;
   gap: var(--space-lg);
   flex-shrink: 0;
+  width: 100%;
 }
 
 .feature-view-title {
@@ -243,6 +244,27 @@ html.has-bg-image .dashboard {
 .feature-view-subtitle {
   font-size: var(--text-sm);
   color: var(--color-text-muted);
+}
+
+.tl-menu-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  color: var(--color-text-faint);
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.tl-menu-btn:hover {
+  color: var(--color-text-strong);
+  background: var(--color-border-muted);
+}
+
+.tl-menu-btn i {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 /* Tasks view — wider input + list */
@@ -372,19 +394,48 @@ html.has-bg-image .dashboard {
   min-height: 0;
 }
 
-/* Multi-day rolling view wrapper */
-.day-schedule-row {
+/* Multi-day rolling view: one shared scroll container (.ds-hours below) instead of a
+   scrollbar per day, with the visible days splitting the available width equally. */
+.mdw-headers-row {
   display: flex;
   flex-direction: row;
   gap: var(--space-md);
-  overflow-x: auto;
-  flex: 1;
-  min-height: 0;
+  flex-shrink: 0;
 }
 
-.day-schedule-row > .day-schedule {
-  min-width: 320px;
-  flex-shrink: 0;
+.mdw-day-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Border lives on this inner wrapper, not the flex item (.mdw-day-col) itself, so it
+   doesn't disturb the equal-width flex distribution across columns - same technique as
+   the hourly grid's per-column divider below. */
+.mdw-day-col-inner {
+  height: 100%;
+}
+
+.mdw-day-col:not(:first-child) .mdw-day-col-inner {
+  border-left: 1px solid var(--color-border-muted);
+  padding-left: var(--space-sm);
+}
+
+.mdw-day-col .ds-header {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mdw-grids-row {
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-md);
+  position: relative;
+}
+
+.mdw-grids-row > .ds-hours-grid {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .ds-header {
@@ -440,8 +491,11 @@ html.has-bg-image .dashboard {
   position: relative;
 }
 
+/* Dashboard widget instance: fill whatever height the widget actually has (driven by the
+   flex chain up to .dash-widget-body, which is sized by gridstack) instead of the calendar
+   page's viewport-relative cap - only scroll if 24 hours doesn't fit in that real height. */
 .ds-hours-compact {
-  max-height: 220px;
+  max-height: none;
 }
 
 .ds-hours-grid {
@@ -777,20 +831,6 @@ html.has-bg-image .dashboard {
 .task-qty-add::-webkit-inner-spin-button,
 .task-qty-add::-webkit-outer-spin-button { -webkit-appearance: none; }
 
-/* Task list type selector in view header */
-.tl-type-select {
-  margin-left: auto;
-  padding: 3px 8px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  color: var(--color-text-muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-.tl-type-select:hover { border-color: var(--color-primary); }
-
-
 .task-completed-heading {
   font-size: var(--text-xs);
   font-weight: 500;
@@ -877,23 +917,17 @@ html.has-bg-image .dashboard {
   align-items: flex-start;
 }
 
-.threeday-wrapper {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
 .threeday {
   display: flex;
   gap: var(--space-sm);
   flex: 1;
+  min-height: 0;
 }
 
 .threeday-col {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
@@ -947,12 +981,6 @@ html.has-bg-image .dashboard {
 .threeday-event-time { flex-shrink: 0; font-weight: 600; opacity: 0.8; }
 .threeday-event-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .threeday-event-x { --evx-inset: 2px; position: absolute; top: var(--evx-inset); right: var(--evx-inset); opacity: 0.5; }
-
-.threeday-empty {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  padding: 2px 4px;
-}
 
 /* ===== Calendar ===== */
 .calendar {
@@ -1581,6 +1609,17 @@ html.has-bg-image .dashboard {
 }
 .dash-add-menu-item:hover { background: var(--color-border-muted); }
 .dash-add-menu-empty { color: var(--color-text-faint); pointer-events: none; }
+
+.dash-add-menu-divider {
+  height: 1px;
+  background: var(--color-border-muted);
+  margin: 4px 0;
+}
+
+.dash-add-menu-item-danger { color: var(--color-danger); }
+.dash-add-menu-item-danger:hover { background: var(--color-danger-muted); }
+
+.tl-menu-check { margin-left: auto; color: var(--color-primary); }
 
 /* ── Widget close button (parameterized widgets) ─── */
 .dash-widget-close {

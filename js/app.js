@@ -10,15 +10,7 @@ import { initTheme, toggleTheme, applyAppearance } from './theme.js';
 import { initEditor, refreshAttachmentTray } from './editor.js';
 import { initShortcuts } from './shortcuts.js';
 
-// Search state
-let searchDebounceTimer = null;
-let currentSearchQuery = null;
-
 // (gridstack handles all dashboard drag/resize)
-let previousContext = {
-  notebook: null,
-  tag: null
-};
 
 // --- Routing ---
 
@@ -277,23 +269,6 @@ function setupEventListeners() {
   window.addEventListener('hashchange', applyRoute);
 
   // Theme toggle (header removed; handled via sidebar + settings click delegation)
-
-  // Search input
-  const searchInput = document.querySelector('.search-input');
-  if (searchInput) {
-    searchInput.addEventListener('input', (event) => {
-      const query = event.target.value;
-
-      // Debounce search (300ms)
-      if (searchDebounceTimer) {
-        clearTimeout(searchDebounceTimer);
-      }
-
-      searchDebounceTimer = setTimeout(() => {
-        handleSearch(query);
-      }, 300);
-    });
-  }
 }
 
 // Handle sidebar clicks
@@ -391,23 +366,7 @@ async function handleSidebarClick(event) {
 
   } else if (action === 'delete-task-list') {
     event.stopPropagation();
-    const listId = parseInt(target.dataset.id);
-    const list = store.taskLists.find(l => l.id === listId);
-    if (!list) return;
-    const confirmed = await showConfirmDialog(`Delete "${list.name}"? All tasks in it will be removed.`);
-    if (!confirmed) return;
-    await db.run('DELETE FROM task_lists WHERE id = ?', [listId]);
-    store.taskLists = store.taskLists.filter(l => l.id !== listId);
-    if (store.currentTaskList === listId) {
-      store.currentTaskList = null;
-      store.tasks = [];
-      store.currentView = 'notes';
-      showNotePanels();
-      store.notes = await db.all('SELECT * FROM notes ORDER BY updated_at DESC');
-      renderSidebar(); renderNoteList(); await renderEditor(null);
-    } else {
-      renderSidebar();
-    }
+    await deleteTaskList(parseInt(target.dataset.id));
 
   } else if (action === 'select-calendar') {
     setRoute('calendar');
@@ -640,6 +599,74 @@ async function handleDashboardClick(event) {
     store.tasks = store.tasks.filter(t => t.id !== taskId);
     rerenderActiveView();
 
+  } else if (action === 'delete-task-list-header') {
+    event.stopPropagation();
+    document.getElementById('tasklist-menu')?.remove();
+    await deleteTaskList(parseInt(target.dataset.id));
+
+  } else if (action === 'toggle-tasklist-menu') {
+    event.stopPropagation();
+    const existing = document.getElementById('tasklist-menu');
+    if (existing) { existing.remove(); return; }
+
+    const listId = parseInt(target.dataset.listId);
+    const list = store.taskLists.find(l => l.id === listId);
+    if (!list) return;
+
+    // Capture the trigger's position *before* building the menu - lucide.createIcons()
+    // below re-scans and replaces every [data-lucide] element in the whole document, which
+    // would detach `target` (also a [data-lucide]-hosted button icon) and zero out a later
+    // getBoundingClientRect() read.
+    const triggerRect = target.getBoundingClientRect();
+
+    const TYPES = [
+      { value: 'priority', icon: 'bell', label: 'Priority' },
+      { value: 'quantity', icon: 'shopping-cart', label: 'Quantity' },
+      { value: 'basic', icon: 'check-square', label: 'Basic' }
+    ];
+    const typeItems = TYPES.map(t => `
+      <div class="dash-add-menu-item" data-action="set-tasklist-type-menu" data-list-id="${listId}" data-type="${t.value}">
+        <i data-lucide="${t.icon}" width="12" height="12"></i> ${t.label}
+        ${list.type === t.value ? '<i data-lucide="check" width="12" height="12" class="tl-menu-check"></i>' : ''}
+      </div>`).join('');
+
+    const menu = document.createElement('div');
+    menu.id = 'tasklist-menu';
+    menu.className = 'dash-add-widget-menu dash-add-widget-menu-fixed';
+    menu.innerHTML = `
+      ${typeItems}
+      <div class="dash-add-menu-divider"></div>
+      <div class="dash-add-menu-item dash-add-menu-item-danger" data-action="delete-task-list-header" data-id="${listId}">
+        <i data-lucide="trash-2" width="12" height="12"></i> Delete list
+      </div>`;
+    document.body.appendChild(menu);
+    if (window.lucide) window.lucide.createIcons({ nodes: Array.from(menu.querySelectorAll('[data-lucide]')) });
+
+    // Align right: menu's right edge lines up with the trigger's right edge.
+    menu.style.top = `${triggerRect.bottom + 4}px`;
+    menu.style.right = `${window.innerWidth - triggerRect.right}px`;
+
+    menu.addEventListener('click', handleDashboardClick);
+
+    const closeMenu = (e) => {
+      const liveTrigger = document.querySelector('[data-action="toggle-tasklist-menu"]');
+      if (!menu.contains(e.target) && e.target !== liveTrigger && !(liveTrigger && liveTrigger.contains(e.target))) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
+
+  } else if (action === 'set-tasklist-type-menu') {
+    document.getElementById('tasklist-menu')?.remove();
+    const listId = parseInt(target.dataset.listId);
+    const type = target.dataset.type;
+    await db.run('UPDATE task_lists SET type = ? WHERE id = ?', [type, listId]);
+    const list = store.taskLists.find(l => l.id === listId);
+    if (list) list.type = type;
+    renderSidebar();
+    renderTasksView();
+
   } else if (action === 'cal-prev') {
     store.calendarMonth--;
     if (store.calendarMonth < 0) { store.calendarMonth = 11; store.calendarYear--; }
@@ -837,14 +864,6 @@ async function handleTasksViewChange(event) {
     await db.run('UPDATE tasks SET quantity = ? WHERE id = ?', [val, taskId]);
     const task = store.tasks.find(t => t.id === taskId);
     if (task) task.quantity = val;
-  } else if (target.dataset.action === 'set-tasklist-type') {
-    const listId = parseInt(target.dataset.listId);
-    const type = target.value;
-    await db.run('UPDATE task_lists SET type = ? WHERE id = ?', [type, listId]);
-    const list = store.taskLists.find(l => l.id === listId);
-    if (list) list.type = type;
-    renderSidebar();
-    renderTasksView();
   }
 }
 
@@ -1293,91 +1312,6 @@ async function createNote() {
   }
 }
 
-// Build FTS query helper
-function buildFtsQuery(raw) {
-  return raw.trim()
-    .split(/\s+/)
-    .map(w => w.replace(/['"*]/g, '') + '*')
-    .join(' ');
-}
-
-// Handle search
-async function handleSearch(query) {
-  // Clear debounce timer
-  if (searchDebounceTimer) {
-    clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = null;
-  }
-
-  if (!query || !query.trim()) {
-    // Restore previous context
-    currentSearchQuery = null;
-    const prevNotebook = previousContext.notebook;
-    const prevTag = previousContext.tag;
-
-    store.currentNotebook = prevNotebook;
-    store.currentTag = prevTag;
-
-    // Reload notes based on context
-    try {
-      if (prevNotebook) {
-        store.notes = await db.all(
-          'SELECT * FROM notes WHERE notebook_id = ? ORDER BY updated_at DESC',
-          [prevNotebook]
-        );
-      } else if (prevTag) {
-        store.notes = await db.all(
-          `SELECT n.* FROM notes n
-           JOIN note_tags nt ON n.id = nt.note_id
-           WHERE nt.tag_id = ?
-           ORDER BY n.updated_at DESC`,
-          [prevTag]
-        );
-      } else {
-        // No filter - load all notes
-        store.notes = await db.all('SELECT * FROM notes ORDER BY updated_at DESC');
-      }
-    } catch (error) {
-      console.error('Failed to restore notes:', error);
-    }
-
-    renderSidebar();
-    renderNoteList();
-    return;
-  }
-
-  // Save previous context before searching
-  if (!currentSearchQuery) {
-    previousContext = {
-      notebook: store.currentNotebook,
-      tag: store.currentTag
-    };
-  }
-
-  currentSearchQuery = query;
-
-  try {
-    // Query FTS5
-    const searchResults = await db.all(
-      `SELECT n.* FROM notes n
-       JOIN notes_fts f ON n.id = f.rowid
-       WHERE notes_fts MATCH ?
-       ORDER BY rank`,
-      [buildFtsQuery(query)]
-    );
-
-    // Clear current filters
-    store.currentNotebook = null;
-    store.currentTag = null;
-    store.notes = searchResults;
-
-    renderSidebar();
-    renderNoteList(query);
-  } catch (error) {
-    console.error('Search failed:', error);
-    showToast('Search failed. Please try again.', 'error');
-  }
-}
 
 // Delete note
 async function deleteNote(noteId) {
@@ -1399,13 +1333,49 @@ async function deleteNote(noteId) {
           }
 
           // Re-render
-          renderNoteList(currentSearchQuery);
+          renderNoteList();
           await renderEditor(null);
 
           console.log('Note deleted:', noteId);
         } catch (error) {
           console.error('Delete failed:', error);
           showToast('Could not delete note. Please try again.', 'error');
+        }
+      }
+    );
+  } catch (error) {
+    // User cancelled - do nothing
+  }
+}
+
+// Delete task list
+async function deleteTaskList(listId) {
+  const list = store.taskLists.find(l => l.id === listId);
+  if (!list) return;
+  try {
+    await showConfirmDialog(
+      `Delete "${list.name}"?`,
+      'All tasks in it will be removed.',
+      async () => {
+        try {
+          await db.run('DELETE FROM task_lists WHERE id = ?', [listId]);
+          store.taskLists = store.taskLists.filter(l => l.id !== listId);
+
+          if (store.currentTaskList === listId) {
+            store.currentTaskList = null;
+            store.tasks = [];
+            store.currentView = 'notes';
+            showNotePanels();
+            store.notes = await db.all('SELECT * FROM notes ORDER BY updated_at DESC');
+            renderSidebar(); renderNoteList(); await renderEditor(null);
+          } else {
+            renderSidebar();
+          }
+
+          console.log('Task list deleted:', listId);
+        } catch (error) {
+          console.error('Delete task list failed:', error);
+          showToast('Could not delete task list. Please try again.', 'error');
         }
       }
     );
@@ -1444,7 +1414,7 @@ async function deleteNotebook(notebookId) {
 
           // Re-render
           renderSidebar();
-          renderNoteList(currentSearchQuery);
+          renderNoteList();
 
           console.log('Notebook deleted:', notebookId);
         } catch (error) {
@@ -1471,7 +1441,7 @@ async function deleteTag(tagId) {
           if (store.currentTag === tagId) {
             store.currentTag = null;
             store.notes = await db.all('SELECT * FROM notes ORDER BY updated_at DESC');
-            renderNoteList(currentSearchQuery);
+            renderNoteList();
           }
           renderSidebar();
         } catch (error) {
