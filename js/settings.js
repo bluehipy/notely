@@ -6,6 +6,9 @@ const DEFAULTS = {
     accentColor: '',  // '' = use theme default
     bgImageSet: false // true when an image is stored in localStorage key notely-bg-image
   },
+  calendar: {
+    rollingDays: 1    // 1-7, how many days the full Calendar page shows starting at the selected day
+  },
   dashboard: {
     widgets: { recentNotes: true, calendar: true, events: true, scratchpad: true },
     recentNotesCount: 8,

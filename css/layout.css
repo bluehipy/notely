@@ -372,6 +372,21 @@ html.has-bg-image .dashboard {
   min-height: 0;
 }
 
+/* Multi-day rolling view wrapper */
+.day-schedule-row {
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-md);
+  overflow-x: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.day-schedule-row > .day-schedule {
+  min-width: 320px;
+  flex-shrink: 0;
+}
+
 .ds-header {
   font-size: var(--text-base);
   font-weight: 600;

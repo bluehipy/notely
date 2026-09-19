@@ -709,7 +709,7 @@ export function scrollTimelinesToDefault(root) {
   });
 }
 
-function buildDayScheduleHTML(dateStr) {
+function buildDayScheduleHTML(dateStr, uid = 'main') {
   const d = new Date(dateStr + 'T00:00:00');
   const dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
@@ -732,7 +732,7 @@ function buildDayScheduleHTML(dateStr) {
     <div class="day-schedule">
       <div class="ds-header">${dateLabel}</div>
       ${allDayHTML}
-      ${buildTimelineHTML(dateStr, { rowHeight: 48, labelWidth: 52, uid: 'main' })}
+      ${buildTimelineHTML(dateStr, { rowHeight: 48, labelWidth: 52, uid })}
     </div>`;
 }
 
@@ -1008,6 +1008,23 @@ export function renderCalendarView() {
     statusBanner = `<div class="cal-status-banner">Loading events…</div>`;
   }
 
+  // Render single or multiple day schedules based on calendar.rollingDays setting
+  const rollingDays = Math.max(1, Math.min(7, store.settings.calendar?.rollingDays ?? 1));
+  let scheduleHTML;
+  if (rollingDays === 1) {
+    // Single day: keep exact same structure as before
+    scheduleHTML = buildDayScheduleHTML(scheduleDate);
+  } else {
+    // Multiple days: render N columns side by side
+    const dayColumns = Array.from({ length: rollingDays }, (_, offset) => {
+      const d = new Date(scheduleDate + 'T00:00:00');
+      d.setDate(d.getDate() + offset);
+      const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+      return buildDayScheduleHTML(dateStr, `day-${offset}`);
+    }).join('');
+    scheduleHTML = `<div class="day-schedule-row">${dayColumns}</div>`;
+  }
+
   calendarEl.innerHTML = `
     <div class="feature-view-layout">
       <div class="feature-view-header">
@@ -1019,7 +1036,7 @@ export function renderCalendarView() {
           ${buildCalendarHTML()}
         </div>
         <div class="calendar-view-right">
-          ${buildDayScheduleHTML(scheduleDate)}
+          ${scheduleHTML}
         </div>
       </div>
     </div>`;
@@ -1162,6 +1179,18 @@ export function renderSettingsView() {
                  </button>
                  <input type="file" id="appearance-img-upload" accept="image/*" style="display:none">`
             }
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-title">Calendar</div>
+
+        <div class="settings-row">
+          <div class="settings-row-label">Days to show</div>
+          <div class="settings-row-control">
+            <input type="number" class="settings-number-input" min="1" max="7"
+              value="${s.calendar?.rollingDays ?? 1}" data-setting="calendar.rollingDays" />
           </div>
         </div>
       </div>
