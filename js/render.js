@@ -674,9 +674,15 @@ function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'ma
     ? `<div class="ds-now-line" style="top:${((today.getHours() * 60 + today.getMinutes()) / 60) * rowHeight}px"></div>`
     : '';
 
-  const eventBlocks = placed.map(({ ev, start, end, col, numCols }) => {
+  const eventBlocks = placed.map(({ ev, start, end, col, numCols }, i) => {
     const top = (start / 60) * rowHeight;
-    const height = Math.max((end - start) / 60 * rowHeight, compact ? 14 : 18);
+    let height = Math.max((end - start) / 60 * rowHeight, compact ? 14 : 18);
+    // Don't let the min-height padding push a short event's box past the start of the
+    // next one — otherwise back-to-back events that exactly touch appear to overlap.
+    const next = placed[i + 1];
+    if (next && next.start >= end) {
+      height = Math.min(height, (next.start - start) / 60 * rowHeight);
+    }
     const timeLabel = ev.endTime ? `${ev.time}–${ev.endTime}` : ev.time;
     return `
       <div class="ds-event${compact ? ' ds-event-compact' : ''}" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}"
