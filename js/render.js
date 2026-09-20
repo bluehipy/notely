@@ -684,8 +684,12 @@ function buildTimelineHTML(dateStr, { rowHeight = 48, labelWidth = 52, uid = 'ma
       height = Math.min(height, (next.start - start) / 60 * rowHeight);
     }
     const timeLabel = ev.endTime ? `${ev.time}–${ev.endTime}` : ev.time;
+    // Stacking the time label above the title needs room for two full text lines; below
+    // that the title gets clipped and the box below reads as overlapping it. Short events
+    // fall back to a single line ("time title") that always fits.
+    const oneLine = height < (compact ? 26 : 33);
     return `
-      <div class="ds-event${compact ? ' ds-event-compact' : ''}" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}"
+      <div class="ds-event${compact ? ' ds-event-compact' : ''}${oneLine ? ' ds-event-oneline' : ''}" data-action="cal-edit-event" data-id="${escapeHtml(ev.id)}" data-calendar-id="${escapeHtml(ev.calendarId)}"
            title="${escapeHtml(ev.title)} (${escapeHtml(timeLabel)})"
            style="top:${top}px;height:${height}px;left:calc(${(col / numCols) * 100}% + 2px);width:calc(${100 / numCols}% - 4px);${eventColorCSS(ev)}">
         <span class="ds-event-time">${escapeHtml(timeLabel)}</span>

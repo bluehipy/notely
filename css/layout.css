@@ -591,6 +591,15 @@ html.has-bg-image .dashboard {
   gap: 0;
 }
 
+.ds-event-oneline {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
+}
+.ds-event-oneline .ds-event-title {
+  min-width: 0;
+}
+
 .ds-event-time {
   color: inherit;
   font-weight: 600;
